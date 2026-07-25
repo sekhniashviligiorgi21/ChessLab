@@ -116,7 +116,6 @@
     if (match) gameResult.value = match[1]
   }
 
-  const LICHESS_TOKEN = import.meta.env.VITE_LICHESS_TOKEN
   const opening = ref("")
   const openingEco = ref("")
   
@@ -137,17 +136,13 @@
     }
 
     const bookList = uciList.join(",")
+    
     const url = bookList
-        ? `https://explorer.lichess.ovh/masters?play=${bookList}`
-        : `https://explorer.lichess.ovh/masters`
+        ? `/api/explorer?play=${bookList}`
+        : `/api/explorer`
 
     try {
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${LICHESS_TOKEN}`,
-          'Accept': 'application/json'
-        }
-      })
+      const response = await fetch(url)
 
       if (response.status === 204) {
         opening.value = "No master games at this position"
@@ -1440,17 +1435,15 @@
     const OPENING_LOOKUP_PLIES = 12
     const playList = uciList.slice(0, OPENING_LOOKUP_PLIES)
     const bookList = playList.join(",")
+    
     const url = bookList
-      ? `https://explorer.lichess.ovh/masters?play=${bookList}`
-      : `https://explorer.lichess.ovh/masters`
+      ? `/api/explorer?play=${bookList}`
+      : `/api/explorer`
 
     try {
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${LICHESS_TOKEN}`,
-          'Accept': 'application/json'
-        }
-      })
+      // CHANGE HERE: Removed the headers
+      const response = await fetch(url)
+      
       if (!response.ok) return "Unknown Opening"
       const data = await response.json()
       return data.opening?.name || "Unknown Opening"
