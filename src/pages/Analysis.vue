@@ -121,9 +121,9 @@
   
   const explorerStats = shallowRef(null)     
   const explorerMoves = shallowRef([])       
-  
   const explorerLoading = ref(false)
   const explorerError = ref("")
+  const explorerDb = ref('masters') // 'masters' or 'lichess'
 
   async function importLichessExplorer(){
     explorerLoading.value = true
@@ -132,20 +132,22 @@
     const uciList = movesListUCI.value
     if (uciList.length > 40) {
       explorerLoading.value = false
+      opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
       return
     }
 
     const bookList = uciList.join(",")
+    const dbParam = explorerDb.value
     
     const url = bookList
-        ? `../../api/explorer?play=${bookList}`
-        : `../../api/explorer`
+        ? `../../api/explorer?db=${dbParam}&play=${encodeURIComponent(bookList)}`
+        : `../../api/explorer?db=${dbParam}`
 
     try {
       const response = await fetch(url)
 
       if (response.status === 204) {
-        opening.value = "No master games at this position"
+        opening.value = `No ${explorerDb.value === 'masters' ? 'master' : 'player'} games at this position`
         openingEco.value = ""
         explorerStats.value = null
         explorerMoves.value = []
@@ -480,6 +482,10 @@
     if (newTab === 'explorer') {
       importLichessExplorer()
     }
+  })
+
+  watch(explorerDb, () => {
+    importLichessExplorer()
   })
 
   function showToast(message) {
@@ -852,6 +858,13 @@
   function prettyMove(move) {
     const pieces = { 'K': '♚', 'Q': '♛', 'R': '♜', 'B': '♝', 'N': '♞' }
     return move.replace(/[KQRBN]/g, p => pieces[p])
+  }
+
+  function formatCount(num) {
+    if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1) + 'B'
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M'
+    if (num >= 10_000) return Math.round(num / 1000) + 'K'
+    return num.toLocaleString()
   }
 
   function squareStyle(square) {
@@ -1437,13 +1450,11 @@
     const bookList = playList.join(",")
     
     const url = bookList
-      ? `../../api/explorer?play=${bookList}`
-      : `../../api/explorer`
+      ? `../../api/explorer?db=masters&play=${encodeURIComponent(bookList)}`
+      : `../../api/explorer?db=masters`
 
     try {
-      // CHANGE HERE: Removed the headers
       const response = await fetch(url)
-      
       if (!response.ok) return "Unknown Opening"
       const data = await response.json()
       return data.opening?.name || "Unknown Opening"
@@ -1689,65 +1700,72 @@
           </div>
         </div>
 
-       <!-- EXPLORER TAB -->
-      <div class="explorer" v-else-if="activeTab === 'explorer'">
-        <div v-if="explorerLoading" class="explorer-status">
-          <div class="mini-spinner"></div>
-          Loading master games…
+        <!-- EXPLORER TAB -->
+        <div class="explorer" v-else-if="activeTab === 'explorer'">
+          <!-- Database Toggle -->
+          <div class="explorer-db-toggle">
+            <button :class="{ active: explorerDb === 'masters' }" @click="explorerDb = 'masters'">Masters</button>
+            <button :class="{ active: explorerDb === 'lichess' }" @click="explorerDb = 'lichess'">Players</button>
+          </div>
+
+          <div v-if="explorerLoading" class="explorer-status">
+            <div class="mini-spinner"></div>
+            Loading {{ explorerDb === 'masters' ? 'master' : 'player' }} games…
+          </div>
+          <div v-else-if="explorerError" class="explorer-status error">{{ explorerError }}</div>
+          
+          <template v-else>
+            <div class="explorer-header">
+              <span class="explorer-eco" v-if="openingEco">{{ openingEco }}</span>
+              <span class="explorer-name">{{ opening }}</span>
+            </div>
+
+            <div class="explorer-table" v-if="explorerMoves.length">
+              <div class="explorer-row explorer-row-head">
+                <span class="col-move">Move</span>
+                <span class="col-games">Games</span>
+                <span class="col-split">W / D / B</span>
+              </div>
+
+              <div
+                v-for="m in explorerMoves"
+                :key="m.uci"
+                class="explorer-row"
+                @click="playExplorerMove(m.uci)"
+              >
+                <span class="col-move">{{ prettyMove(m.san) }}</span>
+                <span class="col-games">
+                  <span class="games-percent">{{ m.percent }}%</span>
+                  <span class="games-count">{{ formatCount(m.total) }}</span>
+                </span>
+                <span class="col-split">
+                  <div class="split-bar">
+                    <div class="split-white" :style="{ width: m.white + '%' }" :title="'White ' + m.white + '%'"></div>
+                    <div class="split-draw" :style="{ width: m.draws + '%' }" :title="'Draws ' + m.draws + '%'"></div>
+                    <div class="split-black" :style="{ width: m.black + '%' }" :title="'Black ' + m.black + '%'"></div>
+                  </div>
+                </span>
+              </div>
+
+              <div class="explorer-row explorer-row-total" v-if="explorerStats">
+                <span class="col-move">Σ</span>
+                <span class="col-games">
+                  <span class="games-percent">100%</span>
+                  <span class="games-count">{{ formatCount(explorerStats.total) }}</span>
+                </span>
+                <span class="col-split">
+                  <div class="split-bar">
+                    <div class="split-white" :style="{ width: explorerStats.white + '%' }" :title="'White ' + explorerStats.white + '%'"></div>
+                    <div class="split-draw" :style="{ width: explorerStats.draws + '%' }" :title="'Draws ' + explorerStats.draws + '%'"></div>
+                    <div class="split-black" :style="{ width: explorerStats.black + '%' }" :title="'Black ' + explorerStats.black + '%'"></div>
+                  </div>
+                </span>
+              </div>
+            </div>
+
+            <div class="explorer-status" v-else>No games found for this position</div>
+          </template>
         </div>
-        <div v-else-if="explorerError" class="explorer-status error">{{ explorerError }}</div>
-        <template v-else>
-          <div class="explorer-header">
-            <span class="explorer-eco" v-if="openingEco">{{ openingEco }}</span>
-            <span class="explorer-name">{{ opening }}</span>
-          </div>
-
-          <div class="explorer-table" v-if="explorerMoves.length">
-            <div class="explorer-row explorer-row-head">
-              <span class="col-move">Move</span>
-              <span class="col-games">Games</span>
-              <span class="col-split">White / Draw / Black</span>
-            </div>
-
-            <div
-              v-for="m in explorerMoves"
-              :key="m.uci"
-              class="explorer-row"
-              @click="playExplorerMove(m.uci)"
-            >
-              <span class="col-move">{{ prettyMove(m.san) }}</span>
-              <span class="col-games">
-                <span class="games-percent">{{ m.percent }}%</span>
-                <span class="games-count">{{ m.total.toLocaleString() }}</span>
-              </span>
-              <span class="col-split">
-                <div class="split-bar">
-                  <div class="split-white" :style="{ width: m.white + '%' }" :title="'White ' + m.white + '%'"></div>
-                  <div class="split-draw" :style="{ width: m.draws + '%' }" :title="'Draws ' + m.draws + '%'"></div>
-                  <div class="split-black" :style="{ width: m.black + '%' }" :title="'Black ' + m.black + '%'"></div>
-                </div>
-              </span>
-            </div>
-
-            <div class="explorer-row explorer-row-total" v-if="explorerStats">
-              <span class="col-move">Σ</span>
-              <span class="col-games">
-                <span class="games-percent">100%</span>
-                <span class="games-count">{{ explorerStats.total.toLocaleString() }}</span>
-              </span>
-              <span class="col-split">
-                <div class="split-bar">
-                  <div class="split-white" :style="{ width: explorerStats.white + '%' }" :title="'White ' + explorerStats.white + '%'"></div>
-                  <div class="split-draw" :style="{ width: explorerStats.draws + '%' }" :title="'Draws ' + explorerStats.draws + '%'"></div>
-                  <div class="split-black" :style="{ width: explorerStats.black + '%' }" :title="'Black ' + explorerStats.black + '%'"></div>
-                </div>
-              </span>
-            </div>
-          </div>
-
-          <div class="explorer-status" v-else>No games found for this position</div>
-        </template>
-      </div>
 
       </div>
     </div>
@@ -2772,4 +2790,55 @@
   .split-white { background: #e8e4d8; }
   .split-draw  { background: #8a8a86; }
   .split-black { background: #2b2b2b; }
+
+  /* Prettier Explorer UI & Toggle */
+  .explorer-db-toggle {
+    display: flex;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 4px;
+    border-radius: 10px;
+    margin: 0 0.5rem 0.8rem;
+  }
+
+  .explorer-db-toggle button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: rgba(245, 245, 220, 0.6);
+    padding: 0.45rem;
+    border-radius: 7px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: all 0.2s ease;
+    font-family: 'Inter', sans-serif;
+  }
+
+  .explorer-db-toggle button.active {
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    color: #f4f0e3;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+
+  /* Perfect text alignment for billions of games */
+  .explorer-row {
+    grid-template-columns: 2.8rem 1fr 1.8fr; 
+  }
+
+  .col-games {
+    align-items: flex-start;
+    line-height: 1.1;
+  }
+
+  .games-percent {
+    font-size: 0.92rem;
+  }
+
+  .games-count {
+    font-size: 0.7rem;
+    color: rgba(244, 240, 227, 0.45);
+  }
 </style>

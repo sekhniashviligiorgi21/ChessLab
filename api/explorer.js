@@ -1,12 +1,11 @@
-// api/explorer.js
-
 export default async function handler(req, res) {
   const playMoves = req.query.play || '';
+  // Accept either 'masters' or 'lichess'. Default to 'masters'
+  const db = req.query.db === 'lichess' ? 'lichess' : 'masters';
   
-  // FIX: Use /lichess path for player moves, and encode the moves!
   const url = playMoves 
-    ? `https://explorer.lichess.ovh/lichess?play=${encodeURIComponent(playMoves)}`
-    : `https://explorer.lichess.ovh/lichess`;
+    ? `https://explorer.lichess.ovh/${db}?play=${encodeURIComponent(playMoves)}`
+    : `https://explorer.lichess.ovh/${db}`;
 
   try {
     const response = await fetch(url, {
@@ -21,6 +20,8 @@ export default async function handler(req, res) {
     }
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Lichess Error (${response.status}):`, errorText);
       return res.status(response.status).json({ error: `Explorer error (${response.status})` });
     }
 
