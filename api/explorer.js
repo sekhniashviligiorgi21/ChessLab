@@ -6,8 +6,8 @@ export default async function handler(req, res) {
   
   // 2. Construct the Lichess URL
   const url = playMoves 
-    ? `https://explorer.lichess.ovh/masters?play=${playMoves}`
-    : `https://explorer.lichess.ovh/masters`;
+    ? `https://explorer.lichess.ovh?play=${playMoves}`
+    : `https://explorer.lichess.ovh`;
 
   try {
     // 3. Fetch from Lichess securely on the server
