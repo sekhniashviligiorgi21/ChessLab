@@ -138,8 +138,8 @@
     const bookList = uciList.join(",")
     
     const url = bookList
-        ? `./api/explorer?play=${bookList}`
-        : `./api/explorer`
+        ? `../api/explorer?play=${bookList}`
+        : `../api/explorer`
 
     try {
       const response = await fetch(url)
@@ -1437,8 +1437,8 @@
     const bookList = playList.join(",")
     
     const url = bookList
-      ? `./api/explorer?play=${bookList}`
-      : `./api/explorer`
+      ? `../api/explorer?play=${bookList}`
+      : `../api/explorer`
 
     try {
       // CHANGE HERE: Removed the headers
