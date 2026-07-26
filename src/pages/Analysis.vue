@@ -12,7 +12,6 @@
   import { useRoute, useRouter } from 'vue-router'
 
   const currentTheme = ref(localStorage.getItem('chesslab_theme') || 'brown')
-
   watch(currentTheme, (newTheme) => {
     document.documentElement.setAttribute('data-theme', newTheme)
     localStorage.setItem('chesslab_theme', newTheme)
@@ -22,19 +21,19 @@
   const passiveColor = ref('var(--btn-idle)')
 
   let boardReady = false
-  let engineReady = false 
+  let engineReady = false
 
   onMounted(async () => {
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('click', closeContextMenu)
     window.addEventListener('scroll', closeContextMenu, true)
-    
+
     activeTab.value = 'moves'
     movesTitle.value.style.backgroundColor = activeColor.value
     reportTitle.value.style.backgroundColor = passiveColor.value
     explorerTitle.value.style.backgroundColor = passiveColor.value
 
-    await startEngine();
+    await startEngine()
     engineReady = true
 
     if (route.query.fen) {
@@ -45,7 +44,7 @@
     } else {
       await getAccuracy()
     }
-  });
+  })
 
   onBeforeUnmount(() => {
     window.removeEventListener('keydown', handleKeyDown)
@@ -97,7 +96,7 @@
   const thirdSanLine = ref([])
   const soundOn = ref(true)
   const showBestArrow = ref(true)
-  const bestArrowSquares = ref(null) 
+  const bestArrowSquares = ref(null)
   const toastMessage = ref('')
   const activeTab = ref('moves')
   const explorerTitle = ref(null)
@@ -109,7 +108,6 @@
   const blackRating = ref(null)
   const hasPlayerInfo = ref(false)
 
-  // Extract Game Result from PGN if available
   const gameResult = ref(null)
   if (route.query.pgn) {
     const match = route.query.pgn.match(/\[Result\s+"([^"]+)"\]/)
@@ -118,34 +116,29 @@
 
   const opening = ref("")
   const openingEco = ref("")
-  
-  const explorerStats = shallowRef(null)     
-  const explorerMoves = shallowRef([])       
+
+  const explorerStats = shallowRef(null)
+  const explorerMoves = shallowRef([])
   const explorerLoading = ref(false)
   const explorerError = ref("")
-  const explorerDb = ref('masters') // 'masters' or 'lichess'
+  const explorerDb = ref('masters')
 
-  async function importLichessExplorer(){
+  async function importLichessExplorer() {
     explorerLoading.value = true
     explorerError.value = ""
-
     const uciList = movesListUCI.value
     if (uciList.length > 40) {
       explorerLoading.value = false
       opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
       return
     }
-
-    const bookList = uciList.join(",")
+    const bookList = uciList.join(", ")
     const dbParam = explorerDb.value
-    
     const url = bookList
-        ? `../../api/explorer?db=${dbParam}&play=${encodeURIComponent(bookList)}`
-        : `../../api/explorer?db=${dbParam}`
-
+      ? `../../api/explorer?db=${dbParam}&play=${encodeURIComponent(bookList)}`
+      : `../../api/explorer?db=${dbParam}`
     try {
       const response = await fetch(url)
-
       if (response.status === 204) {
         opening.value = `No ${explorerDb.value === 'masters' ? 'master' : 'player'} games at this position`
         openingEco.value = ""
@@ -154,39 +147,32 @@
         explorerError.value = ""
         return
       }
-
       if (!response.ok) {
         explorerError.value = `Explorer error (${response.status})`
         explorerStats.value = null
         explorerMoves.value = []
         return
       }
-
       const data = await response.json()
-
       if (data.opening) {
-          opening.value = data.opening.name
-          openingEco.value = data.opening.eco
+        opening.value = data.opening.name
+        openingEco.value = data.opening.eco
       } else {
-          opening.value = uciList.length === 0 ? "Starting position" : "Out of book"
-          openingEco.value = ""
+        opening.value = uciList.length === 0 ? "Starting position" : "Out of book"
+        openingEco.value = ""
       }
-
       const total = (data.white ?? 0) + (data.draws ?? 0) + (data.black ?? 0)
       explorerStats.value = total > 0 ? {
-          white: Math.round((data.white / total) * 100),
-          draws: Math.round((data.draws / total) * 100),
-          black: Math.round((data.black / total) * 100),
-          total
+        white: Math.round((data.white / total) * 100),
+        draws: Math.round((data.draws / total) * 100),
+        black: Math.round((data.black / total) * 100),
+        total
       } : null
-
       explorerMoves.value = (data.moves ?? [])
         .map(m => {
           const moveTotal = (m.white ?? 0) + (m.draws ?? 0) + (m.black ?? 0)
           return {
-            san: m.san,
-            uci: m.uci,
-            total: moveTotal,
+            san: m.san, uci: m.uci, total: moveTotal,
             percent: total > 0 ? Math.round((moveTotal / total) * 100) : 0,
             white: moveTotal > 0 ? Math.round((m.white / moveTotal) * 100) : 0,
             draws: moveTotal > 0 ? Math.round((m.draws / moveTotal) * 100) : 0,
@@ -194,17 +180,13 @@
           }
         })
         .sort((a, b) => b.total - a.total)
-
       explorerError.value = ""
-
     } catch (error) {
       console.warn("Explorer fetch failed:", error)
       explorerError.value = "No connection to explorer"
       explorerStats.value = null
       explorerMoves.value = []
-    } finally {
-      explorerLoading.value = false
-    }
+    } 
   }
 
   function playExplorerMove(uci) {
@@ -227,7 +209,7 @@
   const isBlackWinner = computed(() => gameResult.value === '0-1')
 
   const topPlayer = computed(() => {
-    const isWhite = isFlipped.value         
+    const isWhite = isFlipped.value
     return {
       name: isWhite ? whiteName.value : blackName.value,
       rating: isWhite ? whiteRating.value : blackRating.value,
@@ -237,7 +219,7 @@
   })
 
   const bottomPlayer = computed(() => {
-    const isWhite = !isFlipped.value     
+    const isWhite = !isFlipped.value
     return {
       name: isWhite ? whiteName.value : blackName.value,
       rating: isWhite ? whiteRating.value : blackRating.value,
@@ -250,20 +232,12 @@
   let longPressTriggered = false
   let toastTimeout = null
   let audioCtx = null
-  let accuracyDebounceTimer = null
   let lastPress = 0
 
   const moveTree = {
-    id: 0,
-    san: null,
-    uci: null,
-    fen: chess.fen(),
-    accuracy: null,
-    analysisData: null, 
-    parent: null,
-    children: []
+    id: 0, san: null, uci: null, fen: chess.fen(),
+    accuracy: null, analysisData: null, parent: null, children: []
   }
-
   let nodeIdCounter = 1
   const nodeMap = { 0: moveTree }
   const currentNode = shallowRef(moveTree)
@@ -271,62 +245,41 @@
   const renderedMoves = computed(() => {
     treeVersion.value
     const rows = []
-
     function makeCell(node, moveNum, showAsStart, depth) {
       const isWhite = moveNum % 2 === 1
       return {
-        key: `cell-${node.id}`,
-        node,
+        key: `cell-${node.id}`, node,
         displayNum: Math.ceil(moveNum / 2),
-        isWhite,
-        showNum: isWhite || showAsStart,
-        variant: depth > 0
+        isWhite, showNum: isWhite || showAsStart, variant: depth > 0
       }
     }
-
     function walk(startNode, moveNum, depth = 0, isStartOfLine = true) {
       let current = startNode
       let ply = moveNum
       let firstRow = true
-
       if (!current.san) {
         if (current.children.length === 0) return
         walk(current.children[0], ply, depth, isStartOfLine)
-        for (const variant of current.children.slice(1)) {
-          walk(variant, ply, depth + 1, true)
-        }
+        for (const variant of current.children.slice(1)) walk(variant, ply, depth + 1, true)
         return
       }
-
       while (current) {
         const mainReply = current.children[0] ?? null
-
         rows.push({
-          key: `row-${current.id}`,
-          depth,
+          key: `row-${current.id}`, depth,
           cells: [
             makeCell(current, ply, firstRow && isStartOfLine, depth),
             mainReply ? makeCell(mainReply, ply + 1, false, depth) : null
           ]
         })
-
-        for (const variant of current.children.slice(1)) {
-          walk(variant, ply + 1, depth + 1, true)
-        }
-
-        if (mainReply) {
-          for (const variant of mainReply.children.slice(1)) {
-            walk(variant, ply + 2, depth + 1, true)
-          }
-        }
-
+        for (const variant of current.children.slice(1)) walk(variant, ply + 1, depth + 1, true)
+        if (mainReply) for (const variant of mainReply.children.slice(1)) walk(variant, ply + 2, depth + 1, true)
         if (!mainReply) break
         current = mainReply.children[0] ?? null
         ply += 2
         firstRow = false
       }
     }
-
     walk(moveTree, 1)
     return rows
   })
@@ -334,21 +287,19 @@
   const movesTitle = ref(null)
   const reportTitle = ref(null)
 
-  function changeActiveToMoves(){
+  function changeActiveToMoves() {
     activeTab.value = 'moves'
     if (movesTitle.value) movesTitle.value.style.backgroundColor = activeColor.value
     if (reportTitle.value) reportTitle.value.style.backgroundColor = passiveColor.value
     if (explorerTitle.value) explorerTitle.value.style.backgroundColor = passiveColor.value
   }
-
-  function changeActiveToReport(){
+  function changeActiveToReport() {
     activeTab.value = 'report'
     if (reportTitle.value) reportTitle.value.style.backgroundColor = activeColor.value
     if (movesTitle.value) movesTitle.value.style.backgroundColor = passiveColor.value
     if (explorerTitle.value) explorerTitle.value.style.backgroundColor = passiveColor.value
   }
-
-  function changeActiveToExplorer(){
+  function changeActiveToExplorer() {
     activeTab.value = 'explorer'
     if (explorerTitle.value) explorerTitle.value.style.backgroundColor = activeColor.value
     if (movesTitle.value) movesTitle.value.style.backgroundColor = passiveColor.value
@@ -357,32 +308,20 @@
 
   function deleteMove(nodeId) {
     const node = nodeMap[nodeId]
-    if (!node || node.parent === null) return 
-
+    if (!node || node.parent === null) return
     const parent = node.parent
     const idx = parent.children.indexOf(node)
     if (idx !== -1) parent.children.splice(idx, 1)
-
-    function collectIds(n, ids) {
-      ids.push(n.id)
-      for (const child of n.children) collectIds(child, ids)
-      return ids
-    }
+    function collectIds(n, ids) { ids.push(n.id); for (const child of n.children) collectIds(child, ids); return ids }
     const idsToRemove = collectIds(node, [])
     const currentWasRemoved = idsToRemove.includes(currentNode.value.id)
-
     for (const id of idsToRemove) delete nodeMap[id]
-
     treeVersion.value++
-
-    if (currentWasRemoved) {
-      jumpToNode(parent.id)
-    }
+    if (currentWasRemoved) jumpToNode(parent.id)
   }
 
   function showContextMenu(x, y, nodeId) {
-    const menuWidth = 160
-    const menuHeight = 44
+    const menuWidth = 160, menuHeight = 44
     contextMenu.value = {
       visible: true,
       x: Math.min(x, window.innerWidth - menuWidth - 8),
@@ -390,20 +329,12 @@
       nodeId
     }
   }
-
-  function closeContextMenu() {
-    contextMenu.value.visible = false
-  }
-
-  function openContextMenu(event, nodeId) {
-    showContextMenu(event.clientX, event.clientY, nodeId)
-  }
-
+  function closeContextMenu() { contextMenu.value.visible = false }
+  function openContextMenu(event, nodeId) { showContextMenu(event.clientX, event.clientY, nodeId) }
   function handleDeleteFromMenu() {
     if (contextMenu.value.nodeId !== null) deleteMove(contextMenu.value.nodeId)
     closeContextMenu()
   }
-
   function handleTouchStart(event, nodeId) {
     longPressTriggered = false
     longPressTimer = setTimeout(() => {
@@ -413,16 +344,9 @@
       if (navigator.vibrate) navigator.vibrate(10)
     }, 500)
   }
-
-  function cancelLongPress() {
-    clearTimeout(longPressTimer)
-  }
-
+  function cancelLongPress() { clearTimeout(longPressTimer) }
   function handleCellClick(nodeId) {
-    if (longPressTriggered) {
-      longPressTriggered = false
-      return
-    }
+    if (longPressTriggered) { longPressTriggered = false; return }
     jumpToNode(nodeId)
   }
 
@@ -434,33 +358,27 @@
     if (audioCtx.state === 'suspended') audioCtx.resume()
     return audioCtx
   }
-
   function playSound(type) {
     if (!soundOn.value) return
     try {
       const ctx = ensureAudioCtx()
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
-      osc.connect(gain)
-      gain.connect(ctx.destination)
+      osc.connect(gain); gain.connect(ctx.destination)
       const now = ctx.currentTime
-
       const presets = {
-        move:    { freq: 520, gain: 0.06, dur: 0.09 },
+        move: { freq: 520, gain: 0.06, dur: 0.09 },
         capture: { freq: 260, gain: 0.10, dur: 0.14 },
-        check:   { freq: 880, gain: 0.10, dur: 0.20 },
+        check: { freq: 880, gain: 0.10, dur: 0.20 },
       }
       const p = presets[type] ?? presets.move
-
       osc.type = type === 'capture' ? 'square' : 'sine'
       osc.frequency.setValueAtTime(p.freq, now)
       gain.gain.setValueAtTime(p.gain, now)
       gain.gain.exponentialRampToValueAtTime(0.0001, now + p.dur)
-      osc.start(now)
-      osc.stop(now + p.dur + 0.02)
+      osc.start(now); osc.stop(now + p.dur + 0.02)
     } catch (e) {}
   }
-
   function soundForLastMove(sanMove) {
     if (chess.inCheck()) playSound('check')
     else if (sanMove?.captured) playSound('capture')
@@ -471,38 +389,19 @@
     if (!val && boardAPI.value) boardAPI.value.hideMoves()
     else drawBestArrow()
   })
-
-  watch(currentNode, () => {
-    if (activeTab.value === 'explorer') {
-      importLichessExplorer()
-    }
-  }, { immediate: true })
-
-  watch(activeTab, (newTab) => {
-    if (newTab === 'explorer') {
-      importLichessExplorer()
-    }
-  })
-
-  watch(explorerDb, () => {
-    importLichessExplorer()
-  })
+  watch(currentNode, () => { if (activeTab.value === 'explorer') importLichessExplorer() }, { immediate: true })
+  watch(activeTab, (newTab) => { if (newTab === 'explorer') importLichessExplorer() })
+  watch(explorerDb, () => { importLichessExplorer() })
 
   function showToast(message) {
     toastMessage.value = message
     clearTimeout(toastTimeout)
     toastTimeout = setTimeout(() => { toastMessage.value = '' }, 1800)
   }
-
   async function copyToClipboard(text, label) {
-    try {
-      await navigator.clipboard.writeText(text)
-      showToast(`${label} copied to clipboard`)
-    } catch (e) {
-      showToast(`Couldn't copy ${label.toLowerCase()}`)
-    }
+    try { await navigator.clipboard.writeText(text); showToast(`${label} copied to clipboard`) }
+    catch (e) { showToast(`Couldn't copy ${label.toLowerCase()}`) }
   }
-
   function copyPGN() { copyToClipboard(chess.pgn() || '(no moves yet)', 'PGN') }
   function copyFEN() { copyToClipboard(chess.fen(), 'FEN') }
 
@@ -523,32 +422,22 @@
   async function handleBothMoves(move) {
     const uci = move.promotion ? `${move.from}${move.to}${move.promotion}` : `${move.from}${move.to}`
     let sanMove
-    try {
-      sanMove = chess.move({ from: move.from, to: move.to, promotion: move.promotion ?? undefined })
-    } catch (e) {
-      sanMove = null
-    }
-    
-    if (!sanMove) {
-      boardAPI.value.setPosition(currentNode.value.fen)
-      return
-    }
-
+    try { sanMove = chess.move({ from: move.from, to: move.to, promotion: move.promotion ?? undefined }) }
+    catch (e) { sanMove = null }
+    if (!sanMove) { boardAPI.value.setPosition(currentNode.value.fen); return }
     soundForLastMove(sanMove)
     const existing = currentNode.value.children.find(c => c.uci === uci)
-
-    if (existing) {
-      currentNode.value = existing
-    } else {
+    if (existing) { currentNode.value = existing }
+    else {
       const newNode = {
-        id: nodeIdCounter++, san: sanMove.san, uci, fen: chess.fen(), accuracy: null, analysisData: null, parent: currentNode.value, children: []
+        id: nodeIdCounter++, san: sanMove.san, uci, fen: chess.fen(),
+        accuracy: null, analysisData: null, parent: currentNode.value, children: []
       }
       nodeMap[newNode.id] = newNode
       currentNode.value.children.push(newNode)
       currentNode.value = newNode
       treeVersion.value++
     }
-
     movesListUCI.value.push(uci)
     await getAccuracy()
   }
@@ -562,47 +451,29 @@
     movesListUCI.value.pop()
     boardAPI.value.setPosition(chess.fen())
   }
-
   function redoMove() {
     lastMoveSquare.value = null
     lastMoveAccuracy.value = null
     if (currentNode.value.children.length === 0) return
     const nextNode = currentNode.value.children[0]
     let sanMove
-    try {
-      sanMove = chess.move(nextNode.uci)
-    } catch (e) {
-      sanMove = null
-    }
+    try { sanMove = chess.move(nextNode.uci) } catch (e) { sanMove = null }
     if (sanMove) soundForLastMove(sanMove)
     movesListUCI.value.push(nextNode.uci)
     currentNode.value = nextNode
     boardAPI.value.setPosition(nextNode.fen)
   }
-
-  function undoAccuracy() { undoMove(); getAccuracy(); }
-  function redoAccuracy() { redoMove(); getAccuracy(); }
+  function undoAccuracy() { undoMove(); getAccuracy() }
+  function redoAccuracy() { redoMove(); getAccuracy() }
 
   function jumpToNode(nodeId) {
     const node = nodeMap[nodeId]
     if (!node || node === currentNode.value) return
-
     const uciMoves = []
     let current = node
-    while (current.parent !== null) {
-      uciMoves.unshift(current.uci)
-      current = current.parent
-    }
-
+    while (current.parent !== null) { uciMoves.unshift(current.uci); current = current.parent }
     chess.reset()
-    for (const uci of uciMoves) {
-      try {
-        chess.move(uci)
-      } catch (e) {
-        console.warn("Failed to apply UCI in jumpToNode", uci, e)
-      }
-    }
-
+    for (const uci of uciMoves) { try { chess.move(uci) } catch (e) { console.warn("Failed to apply UCI in jumpToNode", uci, e) } }
     movesListUCI.value = uciMoves
     currentNode.value = node
     boardAPI.value.setPosition(node.fen)
@@ -611,14 +482,12 @@
     color.value = ""
     getAccuracy()
   }
-
   function goToStart() { jumpToNode(0) }
   function goToEnd() {
     let node = currentNode.value
     while (node.children.length > 0) node = node.children[0]
     jumpToNode(node.id)
   }
-
   function resetBoard() {
     chess.reset()
     boardAPI.value.setPosition(chess.fen())
@@ -627,23 +496,14 @@
     moveTree.children = []
     moveTree.fen = chess.fen()
     nodeIdCounter = 1
-    for (const key in nodeMap) {
-      if (parseInt(key) !== 0) delete nodeMap[key]
-    }
+    for (const key in nodeMap) if (parseInt(key) !== 0) delete nodeMap[key]
     treeVersion.value++
     getAccuracy()
   }
-
-  function resetAccuracy() {
-    resetBoard()
-    isAccuracy.value = ""
-    color.value = ""
-    moveData.value = null
-  }
+  function resetAccuracy() { resetBoard(); isAccuracy.value = ""; color.value = ""; moveData.value = null }
 
   async function getAccuracy() {
-    await cancelAnalysis() 
-    
+    await cancelAnalysis()
     const cached = currentNode.value.analysisData
     const requiresMultiPV3 = !isImporting.value
     const hasRequiredMultiPV = !requiresMultiPV3 || !currentNode.value.san || (cached?.topMoves?.length >= 3)
@@ -653,34 +513,17 @@
       lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
       lastMoveAccuracy.value = cached.move_accuracy
       currentDepth.value = cached.depth
-      
       isAnalyzing.value = false
       if (showBestArrow.value && boardAPI.value) boardAPI.value.hideMoves()
-      
-      if (typeof evalSize === "function") evalSize()
-      if (typeof moveDescription === "function") moveDescription()
-      if (typeof sanBest === "function") sanBest()
-      if (typeof uciSecondLine === "function") uciSecondLine()
-      if (typeof uciThirdLine === "function") uciThirdLine()
-      if (typeof uciLine === "function") uciLine()
-      drawBestArrow()
-      
-      return 
+      evalSize(); moveDescription(); sanBest(); uciSecondLine(); uciThirdLine(); uciLine(); drawBestArrow()
+      return
     }
-
     if (cached && !hasRequiredMultiPV) {
       moveData.value = cached
       lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
       lastMoveAccuracy.value = cached.move_accuracy
       currentDepth.value = cached.depth
-      
-      if (typeof evalSize === "function") evalSize()
-      if (typeof moveDescription === "function") moveDescription()
-      if (typeof sanBest === "function") sanBest()
-      if (typeof uciSecondLine === "function") uciSecondLine()
-      if (typeof uciThirdLine === "function") uciThirdLine()
-      if (typeof uciLine === "function") uciLine()
-      drawBestArrow()
+      evalSize(); moveDescription(); sanBest(); uciSecondLine(); uciThirdLine(); uciLine(); drawBestArrow()
     }
 
     isAnalyzing.value = true
@@ -698,112 +541,78 @@
         moveData.value = result
         lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
         lastMoveAccuracy.value = result.move_accuracy
-        
         currentNode.value.accuracy = result.move_accuracy
-        currentNode.value.analysisData = result 
-        
+        currentNode.value.analysisData = result
         currentDepth.value = result.depth
         isAnalyzing.value = false
-        
-        if (typeof evalSize === "function") evalSize()
-        if (typeof moveDescription === "function") moveDescription()
-        if (typeof sanBest === "function") sanBest()
-        if (typeof uciSecondLine === "function") uciSecondLine()
-        if (typeof uciThirdLine === "function") uciThirdLine()
-        if (typeof uciLine === "function") uciLine()
-        drawBestArrow()
-        
-        if (!isImporting.value) {
-          treeVersion.value++
-        }
+        evalSize(); moveDescription(); sanBest(); uciSecondLine(); uciThirdLine(); uciLine(); drawBestArrow()
+        if (!isImporting.value) treeVersion.value++
       },
-      beforeFen,
-      afterFen,
-      moveTree.fen,
-      isImporting.value ? 1 : 3 
+      beforeFen, afterFen, moveTree.fen,
+      isImporting.value ? 1 : 3
     )
   }
 
-  function onDepthChange() {
-    localStorage.setItem(DEPTH_STORAGE_KEY, String(targetDepth.value))
-    getAccuracy()
-  }
+  function onDepthChange() { localStorage.setItem(DEPTH_STORAGE_KEY, String(targetDepth.value)); getAccuracy() }
 
   function formatEval(evalObj) {
     if (chess.isGameOver()) {
-      if (chess.isCheckmate()) {
-        return chess.turn() === 'w' ? '0-1' : '1-0'
-      }
-      if (chess.isStalemate() || chess.isInsufficientMaterial() || chess.isThreefoldRepetition() || chess.isDraw()) {
-        return '1/2-1/2'
-      }
+      if (chess.isCheckmate()) return chess.turn() === 'w' ? '0-1' : '1-0'
+      if (chess.isStalemate() || chess.isInsufficientMaterial() || chess.isThreefoldRepetition() || chess.isDraw()) return '1/2-1/2'
     }
-
     if (!evalObj) return ""
     if (evalObj.type === "cp") return (evalObj.value / 100).toFixed(2)
     if (evalObj.type === "mate") return `M${evalObj.value}`
     return ""
   }
-
   function evalSize() {
-      if (!moveData.value || !moveData.value.eval) return
-      const evalValue = moveData.value.eval.value
-      const evalType = moveData.value.eval.type
-      if (evalType === "mate") {
-          if (evalValue >= 0) { cp.value = 800; height.value = 0 }
-          else { cp.value = -800; height.value = 100 }
-          return
-      }
-      cp.value = Math.max(-800, Math.min(800, evalValue))
-      height.value = 50 - (cp.value / 800) * 50
+    if (!moveData.value || !moveData.value.eval) return
+    const evalValue = moveData.value.eval.value
+    const evalType = moveData.value.eval.type
+    if (evalType === "mate") {
+      if (evalValue >= 0) { cp.value = 800; height.value = 0 } else { cp.value = -800; height.value = 100 }
+      return
+    }
+    cp.value = Math.max(-800, Math.min(800, evalValue))
+    height.value = 50 - (cp.value / 800) * 50
   }
-
-  function flipBoard() {
-    boardAPI.value.toggleOrientation()
-    rotate.value += 180
-  }
+  function flipBoard() { boardAPI.value.toggleOrientation(); rotate.value += 180 }
 
   function accuracySymbol(acc) {
-    if (acc === "brilliant") return '/moveClassifications/brilliant.png'
-    if (acc === "best") return '/moveClassifications/best.png'
-    if (acc === "excellent") return '/moveClassifications/excellent.png'
-    if (acc === "good") return '/moveClassifications/good.png'
-    if (acc === "inaccuracy") return '/moveClassifications/inaccuracy.png'
-    if (acc === "mistake") return '/moveClassifications/mistake.png'
-    if (acc === "blunder") return '/moveClassifications/blunder.png'
-    if (acc === "great") return '/moveClassifications/great.png'
-    if (acc === "book") return '/moveClassifications/book.png'
+    const map = {
+      brilliant: 'brilliant', best: 'best', excellent: 'excellent', good: 'good',
+      inaccuracy: 'inaccuracy', mistake: 'mistake', blunder: 'blunder', great: 'great', book: 'book'
+    }
+    return map[acc] ? `/moveClassifications/${map[acc]}.png` : undefined
   }
-
   function moveDescription() {
     isAccuracy.value = ''
     if (!currentNode.value.san) return
     const descriptions = {
-      great:      { color: '#4c8cb5',  text: ' is a great move!'},
-      brilliant:  { color: '#03aea7', text: ' is a brilliant move!!' },
-      book:       { color: '#ad8760',   text: ' is a book move' },
-      best:       { color: '#6ad13f',   text: ' is the best move' },
-      excellent:  { color: '#90bc36',   text: ' is an excellent move' },
-      good:       { color: '#8eae83', text: ' is a good move' },
-      inaccuracy: { color: '#f2bc43',   text: ' is an inaccuracy' },
-      mistake:    { color: '#f38800',   text: ' is a mistake' },
-      blunder:    { color: '#FF0000',   text: ' is a blunder' },
+      great: { color: '#4c8cb5', text: ' is a great move!' },
+      brilliant: { color: '#03aea7', text: ' is a brilliant move!!' },
+      book: { color: '#ad8760', text: ' is a book move' },
+      best: { color: '#6ad13f', text: ' is the best move' },
+      excellent: { color: '#90bc36', text: ' is an excellent move' },
+      good: { color: '#8eae83', text: ' is a good move' },
+      inaccuracy: { color: '#f2bc43', text: ' is an inaccuracy' },
+      mistake: { color: '#f38800', text: ' is a mistake' },
+      blunder: { color: '#FF0000', text: ' is a blunder' },
     }
     const config = descriptions[moveData.value.move_accuracy]
     if (!config) return
     color.value = config.color
-    isAccuracy.value = prettyMove(currentNode.value.san)  + config.text
+    isAccuracy.value = prettyMove(currentNode.value.san) + config.text
   }
-
   function displayBest() {
     if (['brilliant', 'best', 'great', 'book'].includes(moveData.value.move_accuracy)) return ""
     if (moveData.value.best_move === "") return ""
     return prettyMove(bestMoveSan.value) + " was the best"
   }
-
   function uciLine() {
     sanLine.value = []
     bestArrowSquares.value = null
+    if (!moveData.value?.best_line) return
     let lineNum = 0
     greedyChess.load(chess.fen())
     for (let i = 0; i < 30; i++) {
@@ -816,203 +625,146 @@
       lineNum++
     }
   }
-
   function sanBest() {
     if (!moveData.value?.best_move) return
     const baseFen = currentNode.value.parent ? currentNode.value.parent.fen : moveTree.fen
     bestChess.load(baseFen)
-    const bestMoveBefore = moveData.value.best_move
-    const bestMove = bestChess.move(bestMoveBefore, { sloppy: true })
+    const bestMove = bestChess.move(moveData.value.best_move, { sloppy: true })
     if (!bestMove) return
     bestMoveSan.value = bestMove.san
   }
-
   function uciSecondLine() {
     excellentSanLine.value = []
+    if (!moveData.value?.excellent_line) return
     let secondLineNum = 0
     excellentChess.load(chess.fen())
     for (let i = 0; i < 30; i++) {
-      const excellentMoveBefore = moveData.value.excellent_line[secondLineNum]
-      if (!excellentMoveBefore) break
-      const excellentMove = excellentChess.move(excellentMoveBefore, { sloppy: true })
-      if (!excellentMove) break
-      excellentSanLine.value.push(excellentMove.san)
+      const m = moveData.value.excellent_line[secondLineNum]
+      if (!m) break
+      const mm = excellentChess.move(m, { sloppy: true })
+      if (!mm) break
+      excellentSanLine.value.push(mm.san)
       secondLineNum++
     }
   }
-
   function uciThirdLine() {
-      thirdSanLine.value = []
-      let thirdLineNum = 0
-      thirdChess.load(chess.fen())
-      for (let i = 0; i < 30; i++) {
-          const thirdMoveBefore = moveData.value.third_line[thirdLineNum]
-          if (!thirdMoveBefore) break
-          const thirdMove = thirdChess.move(thirdMoveBefore, { sloppy: true })
-          if (!thirdMove) break
-          thirdSanLine.value.push(thirdMove.san)
-          thirdLineNum++
-      }
+    thirdSanLine.value = []
+    if (!moveData.value?.third_line) return
+    let thirdLineNum = 0
+    thirdChess.load(chess.fen())
+    for (let i = 0; i < 30; i++) {
+      const m = moveData.value.third_line[thirdLineNum]
+      if (!m) break
+      const mm = thirdChess.move(m, { sloppy: true })
+      if (!mm) break
+      thirdSanLine.value.push(mm.san)
+      thirdLineNum++
+    }
   }
-
   function prettyMove(move) {
     const pieces = { 'K': '♚', 'Q': '♛', 'R': '♜', 'B': '♝', 'N': '♞' }
-    return move.replace(/[KQRBN]/g, p => pieces[p])
+    return move ? move.replace(/[KQRBN]/g, p => pieces[p]) : ''
   }
-
   function formatCount(num) {
     if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1) + 'B'
     if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M'
     if (num >= 10_000) return Math.round(num / 1000) + 'K'
     return num.toLocaleString()
   }
-
   function squareStyle(square) {
     if (!square) return {}
-
     const file = square.charCodeAt(0) - 97
     const rank = parseInt(square[1]) - 1
-    const isFlipped = (rotate.value / 180) % 2 === 1
-
-    const col = isFlipped ? 7 - file : file
-    const row = isFlipped ? rank : 7 - rank
-
-    return {
-        position: 'absolute',
-        left: `${(col + 1) * 12.5}%`,
-        top: `${row * 12.5}%`,  
-        transform: 'translate(-70%, -35%)',
-    }
+    const flipped = (rotate.value / 180) % 2 === 1
+    const col = flipped ? 7 - file : file
+    const row = flipped ? rank : 7 - rank
+    return { position: 'absolute', left: `${(col + 1) * 12.5}%`, top: `${row * 12.5}%`, transform: 'translate(-70%, -35%)' }
   }
 
   async function playMove() {
-      if (!moveData.value?.best_move) return
-      const uci = moveData.value.best_move
-      const from = uci.slice(0, 2)
-      const to = uci.slice(2, 4)
-      const promotion = uci.length > 4 ? uci[4] : undefined
-
-      undoMove()
-
-      let sanMove
-      try {
-        sanMove = chess.move({ from, to, promotion: promotion ?? undefined })
-      } catch (e) {
-        sanMove = null
+    if (!moveData.value?.best_move) return
+    const uci = moveData.value.best_move
+    const from = uci.slice(0, 2), to = uci.slice(2, 4)
+    const promotion = uci.length > 4 ? uci[4] : undefined
+    undoMove()
+    let sanMove
+    try { sanMove = chess.move({ from, to, promotion: promotion ?? undefined }) } catch (e) { sanMove = null }
+    if (!sanMove) return
+    soundForLastMove(sanMove)
+    const existing = currentNode.value.children.find(c => c.uci === uci)
+    if (existing) { currentNode.value = existing }
+    else {
+      const newNode = {
+        id: nodeIdCounter++, san: sanMove.san, uci, fen: chess.fen(),
+        accuracy: null, analysisData: null, parent: currentNode.value, children: []
       }
-      if (!sanMove) return
-
-      soundForLastMove(sanMove)
-
-      const existing = currentNode.value.children.find(c => c.uci === uci)
-      if (existing) {
-          currentNode.value = existing
-      } else {
-          const newNode = {
-              id: nodeIdCounter++, san: sanMove.san, uci, fen: chess.fen(), accuracy: null, parent: currentNode.value, children: []
-          }
-          nodeMap[newNode.id] = newNode
-          currentNode.value.children.push(newNode)
-          currentNode.value = newNode
-      }
-
-      movesListUCI.value.push(uci)
-      boardAPI.value.setPosition(chess.fen())  
-      treeVersion.value++
-      getAccuracy()  
+      nodeMap[newNode.id] = newNode
+      currentNode.value.children.push(newNode)
+      currentNode.value = newNode
+    }
+    movesListUCI.value.push(uci)
+    boardAPI.value.setPosition(chess.fen())
+    treeVersion.value++
+    getAccuracy()
   }
 
   const handleKeyDown = (event) => {
-      const delay = 200 
-      const currentTime = Date.now()
-
-      if (event.repeat) return
-      if (isImporting.value) return 
-
-      switch (event.key) {
-          case 'ArrowLeft':
-              if (currentTime - lastPress < delay) return
-              lastPress = currentTime
-              undoAccuracy()
-              break
-          case 'ArrowRight':
-              if (currentTime - lastPress < delay) return
-              lastPress = currentTime
-              redoAccuracy()
-              break
-          case 'Home':
-              event.preventDefault()
-              goToStart()
-              break
-          case 'End':
-              event.preventDefault()
-              goToEnd()
-              break
-      }
+    const delay = 200
+    const currentTime = Date.now()
+    if (event.repeat) return
+    if (isImporting.value) return
+    switch (event.key) {
+      case 'ArrowLeft': if (currentTime - lastPress < delay) return; lastPress = currentTime; undoAccuracy(); break
+      case 'ArrowRight': if (currentTime - lastPress < delay) return; lastPress = currentTime; redoAccuracy(); break
+      case 'Home': event.preventDefault(); goToStart(); break
+      case 'End': event.preventDefault(); goToEnd(); break
+    }
   }
 
   function applyUciMove(uci) {
-      const from = uci.slice(0, 2)
-      let to = uci.slice(2, 4)
-      const promotion = uci.length > 4 ? uci[4] : undefined
-
-      const castlingFix = {
-          'e1h1': 'g1', 'e1a1': 'c1', 'e8h8': 'g8', 'e8a8': 'c8'
-      };
-      
-      if (castlingFix[uci]) {
-          to = castlingFix[uci];
+    const from = uci.slice(0, 2)
+    let to = uci.slice(2, 4)
+    const promotion = uci.length > 4 ? uci[4] : undefined
+    const castlingFix = { 'e1h1': 'g1', 'e1a1': 'c1', 'e8h8': 'g8', 'e8a8': 'c8' }
+    if (castlingFix[uci]) to = castlingFix[uci]
+    let sanMove
+    try { sanMove = chess.move({ from, to, promotion: promotion ?? undefined }) }
+    catch (e) { console.warn('Move execution failed for', uci, e); return false }
+    if (!sanMove) return false
+    const normalizedUci = `${from}${to}${promotion ?? ''}`
+    const existing = currentNode.value.children.find(c => c.uci === normalizedUci)
+    if (existing) { currentNode.value = existing }
+    else {
+      const newNode = {
+        id: nodeIdCounter++, san: sanMove.san, uci: normalizedUci, fen: chess.fen(),
+        accuracy: null, analysisData: null, parent: currentNode.value, children: []
       }
-
-      let sanMove;
-      try {
-          sanMove = chess.move({ from, to, promotion: promotion ?? undefined });
-      } catch (e) {
-          console.warn('Move execution failed for', uci, e);
-          return false;
-      }
-
-      if (!sanMove) return false
-
-      const normalizedUci = `${from}${to}${promotion ?? ''}`
-
-      const existing = currentNode.value.children.find(c => c.uci === normalizedUci)
-      if (existing) {
-        currentNode.value = existing
-      } else {
-        const newNode = {
-              id: nodeIdCounter++, san: sanMove.san, uci: normalizedUci, fen: chess.fen(), accuracy: null, parent: currentNode.value, children: []
-          }
-          nodeMap[newNode.id] = newNode
-          currentNode.value.children.push(newNode)
-          currentNode.value = newNode
-          
-          if (!isImporting.value) {
-            treeVersion.value++
-          }
-        }
-
-        movesListUCI.value.push(normalizedUci)
-        return sanMove
+      nodeMap[newNode.id] = newNode
+      currentNode.value.children.push(newNode)
+      currentNode.value = newNode
+      if (!isImporting.value) treeVersion.value++
+    }
+    movesListUCI.value.push(normalizedUci)
+    return sanMove
   }
 
   function playLineMoves(uciList, count) {
-      if (!uciList) return
-      let lastSanMove = null
-      for (let i = 0; i < count; i++) {
-        const uci = uciList[i]
-        if (!uci) break
-        const result = applyUciMove(uci)
-        if (!result) break
-        lastSanMove = result
-      }
-      if (lastSanMove) soundForLastMove(lastSanMove)
-      boardAPI.value.setPosition(chess.fen())
-      treeVersion.value++
-      getAccuracy()
+    if (!uciList) return
+    let lastSanMove = null
+    for (let i = 0; i < count; i++) {
+      const uci = uciList[i]
+      if (!uci) break
+      const result = applyUciMove(uci)
+      if (!result) break
+      lastSanMove = result
+    }
+    if (lastSanMove) soundForLastMove(lastSanMove)
+    boardAPI.value.setPosition(chess.fen())
+    treeVersion.value++
+    getAccuracy()
   }
 
-  async function loadFen(fen){
+  async function loadFen(fen) {
     chess.load(fen)
     moveTree.fen = fen
     currentNode.value = moveTree
@@ -1035,7 +787,6 @@
       if (!importCancelled) {
         goToStart()
         treeVersion.value++
-        
         await saveGameInsights()
         changeActiveToReport()
       }
@@ -1044,14 +795,12 @@
       getAccuracy()
     }
   }
-
   async function tryLoadImportedGame() {
     if (boardReady && engineReady && route.query.moves) {
       const importedUciList = route.query.moves.split('-')
       await loadImportedGame(importedUciList)
     }
   }
-
   async function cancelImport() {
     importCancelled = true
     await cancelAnalysis()
@@ -1062,19 +811,17 @@
   }
 
   const classificationOrder = ['brilliant', 'great', 'best', 'excellent', 'good', 'book', 'inaccuracy', 'mistake', 'blunder']
-
   const classificationMeta = {
-    brilliant:  { label: 'Brilliant',  color: '#03aea7' },
-    great:      { label: 'Great',      color: '#4c8cb5' },
-    best:       { label: 'Best',       color: '#6ad13f' },
-    excellent:  { label: 'Excellent',  color: '#90bc36' },
-    good:       { label: 'Good',       color: '#8eae83' },
-    book:       { label: 'Book',       color: '#ad8760' },
+    brilliant: { label: 'Brilliant', color: '#03aea7' },
+    great: { label: 'Great', color: '#4c8cb5' },
+    best: { label: 'Best', color: '#6ad13f' },
+    excellent: { label: 'Excellent', color: '#90bc36' },
+    good: { label: 'Good', color: '#8eae83' },
+    book: { label: 'Book', color: '#ad8760' },
     inaccuracy: { label: 'Inaccuracy', color: '#f2bc43' },
-    mistake:    { label: 'Mistake',    color: '#f38800' },
-    blunder:    { label: 'Blunder',    color: '#FF0000' }
+    mistake: { label: 'Mistake', color: '#f38800' },
+    blunder: { label: 'Blunder', color: '#FF0000' }
   }
-
   const accuracyWeights = {
     brilliant: 100, great: 100, best: 100, book: 100,
     excellent: 90, good: 80, inaccuracy: 20, mistake: 10, blunder: 0
@@ -1082,59 +829,32 @@
 
   const gameReportStats = computed(() => {
     treeVersion.value
-
-    function emptyCounts() {
-      return classificationOrder.reduce((acc, key) => ({ ...acc, [key]: 0 }), {})
-    }
-
+    function emptyCounts() { return classificationOrder.reduce((acc, key) => ({ ...acc, [key]: 0 }), {}) }
     const white = { counts: emptyCounts(), weightedSum: 0, moveCount: 0 }
     const black = { counts: emptyCounts(), weightedSum: 0, moveCount: 0 }
-
     let current = moveTree.children[0] ?? null
-    let ply = 1 
-
+    let ply = 1
     while (current) {
       const side = ply % 2 === 1 ? white : black
-
       if (current.accuracy && side.counts.hasOwnProperty(current.accuracy)) {
         side.counts[current.accuracy]++
         side.weightedSum += accuracyWeights[current.accuracy] ?? 0
         side.moveCount++
       }
-
       current = current.children[0] ?? null
       ply++
     }
-
-    const finalize = (side) => ({
-      counts: side.counts,
-      accuracy: side.moveCount > 0 ? (side.weightedSum / side.moveCount) : null
-    })
-
+    const finalize = (side) => ({ counts: side.counts, accuracy: side.moveCount > 0 ? (side.weightedSum / side.moveCount) : null })
     return { white: finalize(white), black: finalize(black) }
   })
 
   const estimatedRatings = computed(() => {
     const estimate = (accuracy) => {
       if (accuracy === null) return null
-      
-      // Tier 3: 90% to 100% (Exponentially harder)
-      // 90% -> 2000, 95% -> 2250, 100% -> 2500
-      if (accuracy >= 90) {
-        return Math.round(2000 + (accuracy - 90) * 50)
-      }
-      
-      // Tier 2: 70% to 90% (Linear progression)
-      // 70% -> 1600, 80% -> 1800, 90% -> 2000
-      if (accuracy >= 70) {
-        return Math.round(1600 + (accuracy - 70) * 20)
-      }
-      
-      // Tier 1: Below 70% (Steady dropoff)
-      // 60% -> 1500, 50% -> 1400, 0% -> 900
+      if (accuracy >= 90) return Math.round(2000 + (accuracy - 90) * 50)
+      if (accuracy >= 70) return Math.round(1600 + (accuracy - 70) * 20)
       return Math.round(900 + accuracy * 10)
     }
-    
     return {
       white: estimate(gameReportStats.value.white.accuracy),
       black: estimate(gameReportStats.value.black.accuracy)
@@ -1150,9 +870,7 @@
   let pendingGameMeta = null
 
   onMounted(() => {
-    onAuthStateChanged(auth, (user) => {
-      if (user) currentUserId.value = user.uid
-    })
+    onAuthStateChanged(auth, (user) => { if (user) currentUserId.value = user.uid })
   })
 
   watch(() => route.query, (newQuery) => {
@@ -1186,20 +904,14 @@
     const c = new Chess()
     let openingEndPly = 12
     let endgameStartPly = Infinity
-
     for (let i = 0; i < uciList.length; i++) {
       c.move(uciList[i])
       const fen = c.fen()
       const { whiteMat, blackMat } = calculateMaterialBalance(fen)
-      
       if ((whiteMat < 14 && blackMat < 14) || (whiteMat < 10 || blackMat < 10)) {
-        if (i >= openingEndPly) {
-          endgameStartPly = i + 1
-          break
-        }
+        if (i >= openingEndPly) { endgameStartPly = i + 1; break }
       }
     }
-    
     return {
       opening: [0, Math.min(openingEndPly, uciList.length)],
       middlegame: [openingEndPly, Math.min(endgameStartPly, uciList.length)],
@@ -1207,16 +919,27 @@
     }
   }
 
+  function bucketLabel(moveNum) {
+    if (moveNum <= 10) return '1-10'
+    if (moveNum <= 20) return '11-20'
+    if (moveNum <= 30) return '21-30'
+    if (moveNum <= 40) return '31-40'
+    return '41+'
+  }
+
+  function resultForColor(color) {
+    if (gameResult.value === '1-0') return color === 'white' ? 'win' : 'lose'
+    if (gameResult.value === '0-1') return color === 'black' ? 'win' : 'lose'
+    if (gameResult.value === '1/2-1/2') return 'draw'
+    return 'unknown'
+  }
+
   async function saveGameInsights() {
     if (!currentUserId.value || !pendingGameMeta) return
-    
+
     const uciList = []
     let curr = moveTree.children[0]
-    while (curr) {
-      uciList.push(curr.uci)
-      curr = curr.children[0]
-    }
-
+    while (curr) { uciList.push(curr.uci); curr = curr.children[0] }
     if (uciList.length === 0) return
 
     const myColor = pendingGameMeta.myColor === 'black' ? 'black' : 'white'
@@ -1225,15 +948,21 @@
     const myCounts = { brilliant: 0, great: 0, best: 0, book: 0, excellent: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 }
     let myWeightedSum = 0
     let myMoveCount = 0
+    const moveBuckets = {}
 
     let node = moveTree.children[0]
     let ply = 1
     while (node) {
       const side = ply % 2 === 1 ? 'white' : 'black'
       if (side === myColor && node.accuracy && myCounts.hasOwnProperty(node.accuracy)) {
+        const w = weights[node.accuracy] ?? 0
         myCounts[node.accuracy]++
-        myWeightedSum += weights[node.accuracy] ?? 0
+        myWeightedSum += w
         myMoveCount++
+        const label = bucketLabel(Math.ceil(ply / 2))
+        if (!moveBuckets[label]) moveBuckets[label] = { sum: 0, count: 0 }
+        moveBuckets[label].sum += w
+        moveBuckets[label].count++
       }
       node = node.children[0]
       ply++
@@ -1243,7 +972,7 @@
 
     const phases = getGamePhases(uciList)
     const phaseAccuracy = { opening: null, middlegame: null, endgame: null }
-
+    const phaseCounts = { opening: 0, middlegame: 0, endgame: 0 }
     for (const [phase, [start, end]] of Object.entries(phases)) {
       let phaseSum = 0, phaseCount = 0
       let n = moveTree.children[0]
@@ -1258,136 +987,204 @@
         p++
       }
       if (phaseCount > 0) phaseAccuracy[phase] = phaseSum / phaseCount
+      phaseCounts[phase] = phaseCount
     }
 
-    const blunderSquares = {};
-    const goodSquares = {};
-    let trackNode = moveTree.children[0];
-    let trackPly = 1;
+    const blunderSquares = {}
+    const goodSquares = {}
+    let trackNode = moveTree.children[0]
+    let trackPly = 1
     while (trackNode) {
-      const side = trackPly % 2 === 1 ? 'white' : 'black';
+      const side = trackPly % 2 === 1 ? 'white' : 'black'
       if (side === myColor) {
+        const square = trackNode.uci.slice(2, 4)
         if (trackNode.accuracy === 'blunder' || trackNode.accuracy === 'mistake') {
-          const square = trackNode.uci.slice(2, 4);
-          blunderSquares[square] = (blunderSquares[square] || 0) + 1;
+          blunderSquares[square] = (blunderSquares[square] || 0) + 1
         } else if (['brilliant', 'great', 'best', 'excellent'].includes(trackNode.accuracy)) {
-          const square = trackNode.uci.slice(2, 4);
-          goodSquares[square] = (goodSquares[square] || 0) + 1;
+          goodSquares[square] = (goodSquares[square] || 0) + 1
         }
       }
-      trackNode = trackNode.children[0];
-      trackPly++;
+      trackNode = trackNode.children[0]
+      trackPly++
     }
 
-    const pieceStats = { p: {count: 0, sum: 0}, n: {count: 0, sum: 0}, b: {count: 0, sum: 0}, r: {count: 0, sum: 0}, q: {count: 0, sum: 0}, k: {count: 0, sum: 0} };
-    let pieceNode = moveTree.children[0];
-    let piecePly = 1;
+    const pieceStats = { p: { count: 0, sum: 0 }, n: { count: 0, sum: 0 }, b: { count: 0, sum: 0 }, r: { count: 0, sum: 0 }, q: { count: 0, sum: 0 }, k: { count: 0, sum: 0 } }
+    let pieceNode = moveTree.children[0]
+    let piecePly = 1
     while (pieceNode) {
-      const side = piecePly % 2 === 1 ? 'white' : 'black';
+      const side = piecePly % 2 === 1 ? 'white' : 'black'
       if (side === myColor && pieceNode.accuracy && pieceNode.san) {
-        let piece = 'p'; 
-        const firstChar = pieceNode.san[0];
-        if (['N', 'B', 'R', 'Q', 'K'].includes(firstChar)) {
-          piece = firstChar.toLowerCase();
-        }
-        const weight = weights[pieceNode.accuracy] ?? 0;
-        pieceStats[piece].count++;
-        pieceStats[piece].sum += weight;
+        let piece = 'p'
+        const firstChar = pieceNode.san[0]
+        if (['N', 'B', 'R', 'Q', 'K'].includes(firstChar)) piece = firstChar.toLowerCase()
+        pieceStats[piece].count++
+        pieceStats[piece].sum += weights[pieceNode.accuracy] ?? 0
       }
-      pieceNode = pieceNode.children[0];
-      piecePly++;
+      pieceNode = pieceNode.children[0]
+      piecePly++
     }
 
-    let earlyTrades = 0;
-    let evalSwings = 0;
-    const tempChess = new Chess();
-    let psNode = moveTree.children[0];
-    let psPly = 1;
-    while (psNode) {
-      const uci = psNode.uci;
-      let moveObj;
-      try {
-        moveObj = tempChess.move({ from: uci.substring(0, 2), to: uci.substring(2, 4), promotion: uci.length > 4 ? uci[4] : undefined });
-      } catch(e) { moveObj = null; }
-      if (moveObj && moveObj.captured && psPly <= 12) earlyTrades++;
+    // ---- v2 playstyle telemetry ----
+    const toCp = (ev) => {
+      if (!ev) return null
+      if (ev.type === 'mate') return Math.sign(ev.value) * 10000
+      return ev.value
+    }
+    const fromMyPerspective = (cpv) => (myColor === 'white' ? cpv : -cpv)
+    const myMat = (fen) => {
+      const { whiteMat, blackMat } = calculateMaterialBalance(fen)
+      return myColor === 'white' ? whiteMat : blackMat
+    }
 
-      if (psNode.analysisData?.eval && psNode.parent?.analysisData?.eval) {
-        if (psNode.parent.analysisData.eval.type === 'cp' && psNode.analysisData.eval.type === 'cp') {
-          if (Math.abs(psNode.analysisData.eval.value - psNode.parent.analysisData.eval.value) > 100) {
-            evalSwings++;
+    let checks = 0, captures = 0, sacrifices = 0
+    let inducedErrors = 0
+    let cpLost = 0, cpWon = 0
+    let bigSwingsFor = 0, bigSwingsAgainst = 0
+    let defendSum = 0, defendCount = 0
+    let attackSum = 0, attackCount = 0
+    let myLastMoveWasStrong = false
+
+    const STRONG = ['brilliant', 'great', 'best', 'excellent']
+    const ERROR_WEIGHT = { inaccuracy: 1, mistake: 2, blunder: 3 }
+
+    let prevNode = moveTree
+    let tNode = moveTree.children[0]
+    let tPly = 1
+    while (tNode) {
+      const side = tPly % 2 === 1 ? 'white' : 'black'
+      const isMine = side === myColor
+      const before = toCp(prevNode.analysisData?.eval)
+      const after = toCp(tNode.analysisData?.eval)
+      const delta = (before !== null && after !== null) ? fromMyPerspective(after) - fromMyPerspective(before) : null
+
+      if (isMine) {
+        if (tNode.san?.includes('+') || tNode.san?.includes('#')) checks++
+        if (tNode.san?.includes('x')) captures++
+        if (delta !== null) {
+          if (delta < 0) cpLost += Math.min(-delta, 1000)
+          if (delta <= -150) bigSwingsAgainst++
+          const w = weights[tNode.accuracy]
+          if (w !== undefined) {
+            const stance = fromMyPerspective(before)
+            if (stance <= -150) { defendSum += w; defendCount++ }
+            else if (stance >= 150) { attackSum += w; attackCount++ }
           }
         }
+        const reply = tNode.children[0] ?? null
+        const replyEval = reply ? toCp(reply.analysisData?.eval) : null
+        if (reply && before !== null && replyEval !== null) {
+          const materialLost = myMat(prevNode.fen) - myMat(reply.fen)
+          const windowDelta = fromMyPerspective(replyEval) - fromMyPerspective(before)
+          if (materialLost >= 2 && windowDelta >= -100) sacrifices++
+        }
+        myLastMoveWasStrong = STRONG.includes(tNode.accuracy)
+      } else {
+        if (delta !== null) {
+          if (delta > 0) cpWon += Math.min(delta, 1000)
+          if (delta >= 150) bigSwingsFor++
+        }
+        if (myLastMoveWasStrong && ERROR_WEIGHT[tNode.accuracy]) inducedErrors += ERROR_WEIGHT[tNode.accuracy]
+        myLastMoveWasStrong = false
       }
-      psNode = psNode.children[0];
-      psPly++;
+      prevNode = tNode
+      tNode = tNode.children[0] ?? null
+      tPly++
+    }
+
+    let result = null
+    const resultMatch = (pendingGameMeta.pgn || '').match(/\[Result\s+"([^"]+)"\]/)
+    if (resultMatch) {
+      const r = resultMatch[1]
+      if (r === '1-0') result = myColor === 'white' ? 'win' : 'loss'
+      else if (r === '0-1') result = myColor === 'black' ? 'win' : 'loss'
+      else if (r === '1/2-1/2') result = 'draw'
     }
 
     const playstyle = {
-      earlyTrades,
-      evalSwings,
-      brilliantMoves: myCounts.brilliant + myCounts.great,
-      endgameAcc: phaseAccuracy.endgame || 0,
-      openingAcc: phaseAccuracy.opening || 0
-    };
+      v: 2,
+      myMoves: myMoveCount,
+      totalPlies: uciList.length,
+      checks, captures,
+      forcingMoves: checks + captures,
+      sacrifices, inducedErrors,
+      brilliantPlus: myCounts.brilliant + myCounts.great,
+      bookMoves: myCounts.book,
+      errors: { inaccuracy: myCounts.inaccuracy, mistake: myCounts.mistake, blunder: myCounts.blunder },
+      cpLost, cpWon, bigSwingsFor, bigSwingsAgainst,
+      defendSum, defendCount, attackSum, attackCount,
+      phaseCounts,
+      reachedEndgame: phases.endgame[0] < uciList.length ? 1 : 0,
+      result
+    }
 
     const openingName = await fetchOpeningNameForSave(uciList)
 
     const pgn = pendingGameMeta.pgn || chess.pgn()
-    function generatePgnHash(pgn) {
+    function generatePgnHash(p) {
       let hash = 0
-      for (let i = 0; i < pgn.length; i++) {
-        const char = pgn.charCodeAt(i)
-        hash = (hash << 5) - hash + char
-        hash &= hash
-      }
+      for (let i = 0; i < p.length; i++) { hash = (hash << 5) - hash + p.charCodeAt(i); hash &= hash }
       return String(hash)
     }
     const pgnHash = generatePgnHash(pgn)
 
-    const extractedPuzzles = [];
-    let pNode = moveTree.children[0];
-    let pPly = 1;
-
+    // ---- Puzzle extraction (with difficulty + multi-move data) ----
+    const extractedPuzzles = []
+    let pNode = moveTree.children[0]
+    let pPly = 1
     while (pNode) {
-      const side = pPly % 2 === 1 ? 'white' : 'black';
-      if (side === myColor) {
-        if (pNode.accuracy === 'blunder' || pNode.accuracy === 'mistake') {
-          if (pNode.parent && pNode.analysisData?.best_move) {
-            const beforeEval = pNode.parent.analysisData.eval;
-            const afterEval = pNode.analysisData.eval;
-
-            if (beforeEval && afterEval) {
-              const beforeCp = beforeEval.type === 'mate' ? Math.sign(beforeEval.value) * 10000 : beforeEval.value;
-              const afterCp = afterEval.type === 'mate' ? Math.sign(afterEval.value) * 10000 : afterEval.value;
-
-              let isPuzzleWorthy = false;
-              
-              if (side === 'white') {
-                if (beforeCp >= -300 && afterCp <= 300 && (beforeCp - afterCp >= 200)) {
-                  isPuzzleWorthy = true;
-                }
-              } else {
-                if (beforeCp <= 300 && afterCp >= -300 && (afterCp - beforeCp >= 200)) {
-                  isPuzzleWorthy = true;
-                }
-              }
-
-              if (isPuzzleWorthy) {
-                extractedPuzzles.push({
-                  fen: pNode.parent.fen,        
-                  bestMove: pNode.analysisData.best_move, 
-                  playedMove: pNode.uci,        
-                  playedMoveAccuracy: pNode.accuracy, 
-                  turn: side,
-                  eval: { type: pNode.analysisData.eval.type, value: pNode.analysisData.eval.value } 
-                });
-              }
+      const side = pPly % 2 === 1 ? 'white' : 'black'
+      if (side === myColor && (pNode.accuracy === 'blunder' || pNode.accuracy === 'mistake')) {
+        if (pNode.parent && pNode.analysisData?.best_move) {
+          const beforeEval = pNode.parent.analysisData?.eval
+          const afterEval = pNode.analysisData.eval
+          if (beforeEval && afterEval) {
+            const beforeCp = beforeEval.type === 'mate' ? Math.sign(beforeEval.value) * 10000 : beforeEval.value
+            const afterCp = afterEval.type === 'mate' ? Math.sign(afterEval.value) * 10000 : afterEval.value
+            let isPuzzleWorthy = false
+            if (side === 'white') {
+              if (beforeCp >= -300 && afterCp <= 300 && (beforeCp - afterCp >= 200)) isPuzzleWorthy = true
+            } else {
+              if (beforeCp <= 300 && afterCp >= -300 && (afterCp - beforeCp >= 200)) isPuzzleWorthy = true
+            }
+            if (isPuzzleWorthy) {
+              extractedPuzzles.push({
+                fen: pNode.parent.fen,
+                bestMove: pNode.analysisData.best_move,
+                playedMove: pNode.uci,
+                playedMoveAccuracy: pNode.accuracy,
+                turn: side,
+                eval: { type: afterEval.type, value: afterEval.value },
+                // NEW: difficulty = how much was thrown away (centipawns)
+                swing: Math.abs(beforeCp - afterCp),
+                // NEW: multi-move continuation (engine principal variation from the puzzle position)
+                continuation: Array.isArray(pNode.analysisData.best_line) ? pNode.analysisData.best_line.slice(0, 5) : [],
+                // NEW: mate theme (best achievable eval from the puzzle position is a forced mate)
+                mateIn: beforeEval.type === 'mate' ? Math.abs(beforeEval.value) : null
+              })
             }
           }
         }
       }
-      pNode = pNode.children[0];
-      pPly++;
+      pNode = pNode.children[0]
+      pPly++
+    }
+
+    // ---- Player objects (fixes the string-vs-object W/L/D bug) ----
+    const whitePlayer = { username: whiteName.value || 'White', rating: whiteRating.value || 0, result: resultForColor('white') }
+    const blackPlayer = { username: blackName.value || 'Black', rating: blackRating.value || 0, result: resultForColor('black') }
+
+    const insightsPayload = {
+      myColor,
+      overallAccuracy,
+      phaseAccuracy,
+      moveCounts: myCounts,
+      totalMoves: myMoveCount,
+      opening: openingName,
+      blunderSquares,
+      goodSquares,
+      pieceStats,
+      playstyle,
+      moveBuckets
     }
 
     const gamesRef = collection(db, `users/${currentUserId.value}/games`)
@@ -1397,48 +1194,33 @@
     if (!dupSnap.empty) {
       const gameDoc = dupSnap.docs[0]
       const gameDocData = gameDoc.data()
-      
       const existingPuzzles = gameDocData.puzzles || []
       const mergedPuzzles = extractedPuzzles.map(newP => {
         const oldP = existingPuzzles.find(p => p.fen === newP.fen && p.bestMove === newP.bestMove)
-        return oldP ? { ...newP, solved: oldP.solved || false } : newP
+        // preserve spaced-repetition scheduling fields if present
+        return oldP ? {
+          ...newP,
+          solved: oldP.solved || false,
+          solvedAt: oldP.solvedAt ?? null,
+          reps: oldP.reps ?? 0,
+          dueAt: oldP.dueAt ?? null
+        } : newP
       })
-
       await updateDoc(doc(db, `users/${currentUserId.value}/games`, gameDoc.id), {
-        insights: {
-          myColor, 
-          overallAccuracy,
-          phaseAccuracy,
-          moveCounts: myCounts,
-          totalMoves: myMoveCount,
-          opening: openingName,
-          blunderSquares,
-          goodSquares,
-          pieceStats,
-          playstyle
-        },
-        puzzles: mergedPuzzles
+        insights: insightsPayload,
+        puzzles: mergedPuzzles,
+        white: whitePlayer,
+        black: blackPlayer
       })
     } else {
       await addDoc(gamesRef, {
         pgn,
         pgnHash,
-        white: pendingGameMeta.white,
-        black: pendingGameMeta.black,
+        white: whitePlayer,
+        black: blackPlayer,
         time_class: 'unknown',
         createdAt: serverTimestamp(),
-        insights: {
-          myColor, 
-          overallAccuracy,
-          phaseAccuracy,
-          moveCounts: myCounts,
-          totalMoves: myMoveCount,
-          opening: openingName,
-          blunderSquares,
-          goodSquares,
-          pieceStats,
-          playstyle
-        },
+        insights: insightsPayload,
         puzzles: extractedPuzzles
       })
     }
@@ -1447,12 +1229,10 @@
   async function fetchOpeningNameForSave(uciList) {
     const OPENING_LOOKUP_PLIES = 12
     const playList = uciList.slice(0, OPENING_LOOKUP_PLIES)
-    const bookList = playList.join(",")
-    
+    const bookList = playList.join(", ")
     const url = bookList
       ? `../../api/explorer?db=masters&play=${encodeURIComponent(bookList)}`
       : `../../api/explorer?db=masters`
-
     try {
       const response = await fetch(url)
       if (!response.ok) return "Unknown Opening"
@@ -1466,7 +1246,7 @@
 </script>
 
 <template>
-  <SettingsPanel 
+  <SettingsPanel
     v-model:isOpen="isSettingsOpen"
     v-model:targetDepth="targetDepth"
     v-model:soundOn="soundOn"
@@ -1474,7 +1254,6 @@
     v-model:boardTheme="currentTheme"
     @depthChanged="onDepthChange"
   />
-
   <Transition name="loading-fade">
     <div v-if="isImporting" class="analysis-loading-overlay">
       <div class="loading-content">
@@ -1496,9 +1275,8 @@
       </div>
     </div>
   </Transition>
-
   <div class="grid-layout">
-    <Title class="title-slot"/>
+    <Title class="title-slot" />
     <div class="board-area">
       <div class="board-wrapper" ref="boardRef">
         <div class="player-bar" v-if="hasPlayerInfo">
@@ -1507,23 +1285,16 @@
           <span v-if="topPlayer.isWinner" class="winner-crown">👑</span>
           <span class="player-rating" v-if="topPlayer.rating">{{ topPlayer.rating }}</span>
         </div>
-        
         <div class="board-row">
           <div class="board-col">
-            <TheChessboard 
+            <TheChessboard
               class="game-board"
-              @move="handleBothMoves" 
-              @board-created="onBoardCreated" 
-              :board-config="{ coordinates: true, animation: { enabled: false } }" 
+              @move="handleBothMoves"
+              @board-created="onBoardCreated"
+              :board-config="{ coordinates: true, animation: { enabled: false } }"
             />
-            <img
-              v-if="lastMoveSquare && lastMoveAccuracy"
-              :src="accuracySymbol(lastMoveAccuracy)"
-              class="board-acc-icon"
-              :style="squareStyle(lastMoveSquare)"
-            />
+            <img v-if="lastMoveSquare && lastMoveAccuracy" :src="accuracySymbol(lastMoveAccuracy)" class="board-acc-icon" :style="squareStyle(lastMoveSquare)" />
           </div>
-          
           <div class="evalbar">
             <div class="evalbar-inner">
               <template v-if="!isFlipped">
@@ -1538,60 +1309,43 @@
             <p class="evalnum">{{ formatEval(moveData?.eval) }}</p>
           </div>
         </div>
-
         <div class="player-bar bottom" v-if="hasPlayerInfo">
           <span class="player-color-dot" :class="bottomPlayer.side"></span>
           <span class="player-name">{{ bottomPlayer.name }}</span>
           <span v-if="bottomPlayer.isWinner" class="winner-crown">👑</span>
           <span class="player-rating" v-if="bottomPlayer.rating">{{ bottomPlayer.rating }}</span>
         </div>
-        
         <div class="boardtools">
-          <button class="jumpstart" @click="goToStart" :disabled="isImporting || currentNode.parent === null" title="Jump to start"><<</button>
-          <button class="undo" @click="undoAccuracy" title="previous" :disabled="isImporting || currentNode.parent === null"><-</button>
+          <button class="jumpstart" @click="goToStart" :disabled="isImporting || currentNode.parent === null" title="Jump to start">&lt;&lt;</button>
+          <button class="undo" @click="undoAccuracy" title="previous" :disabled="isImporting || currentNode.parent === null">&lt;-</button>
           <button class="reverse" @click="flipBoard" title="flip board">↳↰</button>
-          <button class="redo" title="next" @click="redoAccuracy" :disabled="isImporting || currentNode.children.length === 0">-></button>
-          <button class="jumpend" @click="goToEnd" :disabled="isImporting || currentNode.children.length === 0" title="Jump to end">>></button>
+          <button class="redo" title="next" @click="redoAccuracy" :disabled="isImporting || currentNode.children.length === 0">-&gt;</button>
+          <button class="jumpend" @click="goToEnd" :disabled="isImporting || currentNode.children.length === 0" title="Jump to end">&gt;&gt;</button>
         </div>
       </div>
     </div>
-    
     <div class="analysis-container">
       <div class="analyze">
         <div class="analyzis-header">
-          <h2 class="analyzis">
-            Analysis
-            <span v-if="isAnalyzing" class="thinking-dot" title="Engine is thinking"></span>
-          </h2>
+          <h2 class="analyzis">Analysis <span v-if="isAnalyzing" class="thinking-dot" title="Engine is thinking"></span></h2>
           <button class="settings-btn" @click="isSettingsOpen = true" title="Settings">⚙️</button>
         </div>
         <div v-if="moveData" class="move-data">
           <p class="depthnum">Depth {{ currentDepth }}</p>
-          
-          <div class="line">
+          <div class="line pretty-scroll">
             <span class="evalnum2">{{ formatEval(moveData?.eval) }}</span>
-            <span v-for="(move, idx) in sanLine" :key="'best-' + idx" class="line-move" @click="playLineMoves(moveData.best_line, idx + 1)">
-              {{ prettyMove(move) }}&nbsp;
-            </span>
+            <span v-for="(move, idx) in sanLine" :key="'best-' + idx" class="line-move" @click="playLineMoves(moveData.best_line, idx + 1)">{{ prettyMove(move) }}&nbsp;</span>
           </div>
-
-          <div class="secondline" v-if="excellentSanLine.length">
+          <div class="secondline pretty-scroll" v-if="excellentSanLine.length">
             <span class="evalnum3">{{ moveData?.excellent_eval ? formatEval(moveData.excellent_eval) : "" }}</span>
-            <span v-for="(move, idx) in excellentSanLine" :key="'exc-' + idx" class="line-move" @click="playLineMoves(moveData.excellent_line, idx + 1)">
-              {{ prettyMove(move) }}&nbsp;
-            </span>
+            <span v-for="(move, idx) in excellentSanLine" :key="'exc-' + idx" class="line-move" @click="playLineMoves(moveData.excellent_line, idx + 1)">{{ prettyMove(move) }}&nbsp;</span>
           </div>
-
-          <div class="secondline" v-if="thirdSanLine.length">
-            <span class="evalnum3">{{ moveData?.excellent_eval ? formatEval(moveData.excellent_eval) : "" }}</span>
-            <span v-for="(move, idx) in thirdSanLine" :key="'third-' + idx" class="line-move" @click="playLineMoves(moveData.third_line, idx + 1)">
-              {{ prettyMove(move) }}&nbsp;
-            </span>
+          <div class="secondline pretty-scroll" v-if="thirdSanLine.length">
+            <span class="evalnum3">{{ moveData?.third_eval ? formatEval(moveData.third_eval) : "" }}</span>
+            <span v-for="(move, idx) in thirdSanLine" :key="'third-' + idx" class="line-move" @click="playLineMoves(moveData.third_line, idx + 1)">{{ prettyMove(move) }}&nbsp;</span>
           </div>
-          
           <p :style="{color: color}" class="accuracydescribtion">{{ isAccuracy }}</p>
           <p class="bestmove" v-if="movesListUCI.length > 0" @click="playMove">{{ displayBest() }}</p>
-          
           <div class="sharebar">
             <button class="sharebtn" @click="copyPGN">Copy PGN</button>
             <button class="sharebtn" @click="copyFEN">Copy FEN</button>
@@ -1599,14 +1353,11 @@
         </div>
       </div>
       <div class="moves">
-        
         <div class="movesButtons">
           <button class="movehistory" @click="changeActiveToMoves()" ref="movesTitle">Moves</button>
           <button class="movehistory" @click="changeActiveToReport()" ref="reportTitle">Report</button>
           <button class="movehistory" @click="changeActiveToExplorer()" ref="explorerTitle">Explorer</button>
         </div>
-        
-        <!-- MOVES TAB -->
         <div class="moveslist" v-if="activeTab === 'moves'" ref="movesListRef">
           <template v-for="row in renderedMoves" :key="row.key">
             <div class="move-row" :class="{ variant: row.depth > 0 }" :style="{ '--indent': `${row.depth * 1.05}rem` }">
@@ -1630,68 +1381,27 @@
             </div>
           </template>
         </div>
-
-        <!-- REPORT TAB -->
         <div class="report" v-else-if="activeTab === 'report'">
           <div class="report-columns">
             <div class="report-col">
-              <div class="report-side-header">
-                <span class="side-swatch white-swatch"></span>
-                <span>White</span>
-              </div>
-              <div class="accuracy-score" v-if="gameReportStats.white.accuracy !== null">
-                {{ gameReportStats.white.accuracy.toFixed(1) }}<span class="accuracy-percent">%</span>
-              </div>
+              <div class="report-side-header"><span class="side-swatch white-swatch"></span><span>White</span></div>
+              <div class="accuracy-score" v-if="gameReportStats.white.accuracy !== null">{{ gameReportStats.white.accuracy.toFixed(1) }}<span class="accuracy-percent">%</span></div>
               <div class="accuracy-score empty" v-else>—</div>
-
-              <!-- Estimated Rating -->
-              <div class="est-rating" v-if="estimatedRatings.white !== null">
-                <span class="est-rating-label">Est. Rating</span>
-                <span class="est-rating-value">{{ estimatedRatings.white }}</span>
-              </div>
-              <div class="est-rating empty" v-else>
-                <span class="est-rating-label">Est. Rating</span>
-                <span class="est-rating-value">—</span>
-              </div>
-
-              <div
-                v-for="key in classificationOrder"
-                :key="'w-' + key"
-                class="report-row"
-                :class="{ dim: gameReportStats.white.counts[key] === 0 }"
-              >
+              <div class="est-rating" v-if="estimatedRatings.white !== null"><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">{{ estimatedRatings.white }}</span></div>
+              <div class="est-rating empty" v-else><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">—</span></div>
+              <div v-for="key in classificationOrder" :key="'w-' + key" class="report-row" :class="{ dim: gameReportStats.white.counts[key] === 0 }">
                 <img :src="accuracySymbol(key)" class="report-row-icon" />
                 <span class="report-row-label" :style="{ color: classificationMeta[key].color }">{{ classificationMeta[key].label }}</span>
                 <span class="report-row-count">{{ gameReportStats.white.counts[key] }}</span>
               </div>
             </div>
-
             <div class="report-col">
-              <div class="report-side-header">
-                <span class="side-swatch black-swatch"></span>
-                <span>Black</span>
-              </div>
-              <div class="accuracy-score" v-if="gameReportStats.black.accuracy !== null">
-                {{ gameReportStats.black.accuracy.toFixed(1) }}<span class="accuracy-percent">%</span>
-              </div>
+              <div class="report-side-header"><span class="side-swatch black-swatch"></span><span>Black</span></div>
+              <div class="accuracy-score" v-if="gameReportStats.black.accuracy !== null">{{ gameReportStats.black.accuracy.toFixed(1) }}<span class="accuracy-percent">%</span></div>
               <div class="accuracy-score empty" v-else>—</div>
-
-              <!-- Estimated Rating -->
-              <div class="est-rating" v-if="estimatedRatings.black !== null">
-                <span class="est-rating-label">Est. Rating</span>
-                <span class="est-rating-value">{{ estimatedRatings.black }}</span>
-              </div>
-              <div class="est-rating empty" v-else>
-                <span class="est-rating-label">Est. Rating</span>
-                <span class="est-rating-value">—</span>
-              </div>
-
-              <div
-                v-for="key in classificationOrder"
-                :key="'b-' + key"
-                class="report-row"
-                :class="{ dim: gameReportStats.black.counts[key] === 0 }"
-              >
+              <div class="est-rating" v-if="estimatedRatings.black !== null"><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">{{ estimatedRatings.black }}</span></div>
+              <div class="est-rating empty" v-else><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">—</span></div>
+              <div v-for="key in classificationOrder" :key="'b-' + key" class="report-row" :class="{ dim: gameReportStats.black.counts[key] === 0 }">
                 <img :src="accuracySymbol(key)" class="report-row-icon" />
                 <span class="report-row-label" :style="{ color: classificationMeta[key].color }">{{ classificationMeta[key].label }}</span>
                 <span class="report-row-count">{{ gameReportStats.black.counts[key] }}</span>
@@ -1699,91 +1409,54 @@
             </div>
           </div>
         </div>
-
-        <!-- EXPLORER TAB -->
         <div class="explorer" v-else-if="activeTab === 'explorer'">
-          <!-- Database Toggle -->
           <div class="explorer-db-toggle">
             <button :class="{ active: explorerDb === 'masters' }" @click="explorerDb = 'masters'">Masters</button>
             <button :class="{ active: explorerDb === 'lichess' }" @click="explorerDb = 'lichess'">Players</button>
           </div>
-
-          <div v-if="explorerLoading" class="explorer-status">
-            <div class="mini-spinner"></div>
-            Loading {{ explorerDb === 'masters' ? 'master' : 'player' }} games…
-          </div>
+          <div v-if="explorerLoading" class="explorer-status"><div class="mini-spinner"></div>Loading {{ explorerDb === 'masters' ? 'master' : 'player' }} games…</div>
           <div v-else-if="explorerError" class="explorer-status error">{{ explorerError }}</div>
-          
           <template v-else>
             <div class="explorer-header">
               <span class="explorer-eco" v-if="openingEco">{{ openingEco }}</span>
               <span class="explorer-name">{{ opening }}</span>
             </div>
-
             <div class="explorer-table" v-if="explorerMoves.length">
-              <div class="explorer-row explorer-row-head">
-                <span class="col-move">Move</span>
-                <span class="col-games">Games</span>
-                <span class="col-split">W / D / B</span>
-              </div>
-
-              <div
-                v-for="m in explorerMoves"
-                :key="m.uci"
-                class="explorer-row"
-                @click="playExplorerMove(m.uci)"
-              >
+              <div class="explorer-row explorer-row-head"><span class="col-move">Move</span><span class="col-games">Games</span><span class="col-split">W / D / B</span></div>
+              <div v-for="m in explorerMoves" :key="m.uci" class="explorer-row" @click="playExplorerMove(m.uci)">
                 <span class="col-move">{{ prettyMove(m.san) }}</span>
-                <span class="col-games">
-                  <span class="games-percent">{{ m.percent }}%</span>
-                  <span class="games-count">{{ formatCount(m.total) }}</span>
-                </span>
+                <span class="col-games"><span class="games-percent">{{ m.percent }}%</span><span class="games-count">{{ formatCount(m.total) }}</span></span>
                 <span class="col-split">
                   <div class="split-bar">
-                    <div class="split-white" :style="{ width: m.white + '%' }" :title="'White ' + m.white + '%'"></div>
-                    <div class="split-draw" :style="{ width: m.draws + '%' }" :title="'Draws ' + m.draws + '%'"></div>
-                    <div class="split-black" :style="{ width: m.black + '%' }" :title="'Black ' + m.black + '%'"></div>
+                    <div class="split-white" :style="{ width: m.white + '%' }"></div>
+                    <div class="split-draw" :style="{ width: m.draws + '%' }"></div>
+                    <div class="split-black" :style="{ width: m.black + '%' }"></div>
                   </div>
                 </span>
               </div>
-
               <div class="explorer-row explorer-row-total" v-if="explorerStats">
                 <span class="col-move">Σ</span>
-                <span class="col-games">
-                  <span class="games-percent">100%</span>
-                  <span class="games-count">{{ formatCount(explorerStats.total) }}</span>
-                </span>
+                <span class="col-games"><span class="games-percent">100%</span><span class="games-count">{{ formatCount(explorerStats.total) }}</span></span>
                 <span class="col-split">
                   <div class="split-bar">
-                    <div class="split-white" :style="{ width: explorerStats.white + '%' }" :title="'White ' + explorerStats.white + '%'"></div>
-                    <div class="split-draw" :style="{ width: explorerStats.draws + '%' }" :title="'Draws ' + explorerStats.draws + '%'"></div>
-                    <div class="split-black" :style="{ width: explorerStats.black + '%' }" :title="'Black ' + explorerStats.black + '%'"></div>
+                    <div class="split-white" :style="{ width: explorerStats.white + '%' }"></div>
+                    <div class="split-draw" :style="{ width: explorerStats.draws + '%' }"></div>
+                    <div class="split-black" :style="{ width: explorerStats.black + '%' }"></div>
                   </div>
                 </span>
               </div>
             </div>
-
             <div class="explorer-status" v-else>No games found for this position</div>
           </template>
         </div>
-
       </div>
     </div>
   </div>
-
   <Teleport to="body">
-    <div
-      v-if="contextMenu.visible"
-      class="context-menu"
-      :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
-      @click.stop
-    >
-      <button class="context-menu-item delete" @click="handleDeleteFromMenu">
-        Delete move
-      </button>
+    <div v-if="contextMenu.visible" class="context-menu" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }" @click.stop>
+      <button class="context-menu-item delete" @click="handleDeleteFromMenu">Delete move</button>
     </div>
   </Teleport>
-
   <Transition name="toast-fade">
     <div v-if="toastMessage" class="toast">{{ toastMessage }}</div>
   </Transition>
@@ -1825,7 +1498,10 @@
     }
   }
 
-  .title-slot { grid-area: title; min-width: 0; }
+  .title-slot {
+    grid-area: title;
+    min-width: 0;
+  }
 
   .board-area {
     grid-area: board;
@@ -1838,7 +1514,7 @@
   .board-wrapper {
     position: relative;
     width: 100%;
-    max-width: min(95vw, 38rem); 
+    max-width: min(95vw, 38rem);
     min-width: 0;
     margin: 0 auto;
     display: flex;
@@ -1901,7 +1577,7 @@
     flex-direction: column;
     border-radius: 10px;
     overflow: hidden;
-    box-shadow: inset 0 2px 5px rgba(0,0,0,0.5);
+    box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5);
   }
 
   .player-bar {
@@ -1932,8 +1608,13 @@
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
   }
 
-  .player-color-dot.white { background: #f4f0e3; }
-  .player-color-dot.black { background: #1a1a1a; }
+  .player-color-dot.white {
+    background: #f4f0e3;
+  }
+
+  .player-color-dot.black {
+    background: #1a1a1a;
+  }
 
   .player-name {
     font-weight: 600;
@@ -1975,7 +1656,11 @@
     scrollbar-color: rgba(194, 197, 170, 0.4) rgba(0, 0, 0, 0.2);
   }
 
-  @media (min-width: 1200px) { .moves { max-width: 20rem; } }
+  @media (min-width: 1200px) {
+    .moves {
+      max-width: 20rem;
+    }
+  }
 
   .moveslist {
     margin: 0 auto;
@@ -2009,7 +1694,9 @@
     position: relative;
   }
 
-  .move-row.variant { border-left: 2px solid rgba(232, 232, 208, 0.16); }
+  .move-row.variant {
+    border-left: 2px solid rgba(232, 232, 208, 0.16);
+  }
 
   .move-cell {
     min-height: 2.45rem;
@@ -2027,7 +1714,6 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
     box-sizing: border-box;
     overflow: hidden;
-    -webkit-user-select: none;
     user-select: none;
   }
 
@@ -2042,8 +1728,17 @@
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 18px rgba(103, 122, 228, 0.25);
   }
 
-  .move-cell.variant { color: #dbe4ff; background: rgba(255, 255, 255, 0.06); }
-  .move-cell.empty { pointer-events: none; background: transparent; border-color: transparent; box-shadow: none; }
+  .move-cell.variant {
+    color: #dbe4ff;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .move-cell.empty {
+    pointer-events: none;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
 
   .move-num {
     color: rgba(232, 232, 208, 0.72);
@@ -2054,10 +1749,28 @@
     background: rgba(0, 0, 0, 0.16);
   }
 
-  .move-san-text { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acc-badge { width: 20px; height: 20px; border-radius: 50%; margin-left: 2px; }
+  .move-san-text {
+    font-weight: 600;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-  .analysis-container { grid-area: analysis; display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+  .acc-badge {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    margin-left: 2px;
+  }
+
+  .analysis-container {
+    grid-area: analysis;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+  }
 
   .analyze {
     border-radius: 15px;
@@ -2072,7 +1785,11 @@
     margin: auto;
   }
 
-  @media (min-width: 1200px) { .analyze { max-width: 20rem; } }
+  @media (min-width: 1200px) {
+    .analyze {
+      max-width: 20rem;
+    }
+  }
 
   .analyzis-header {
     display: flex;
@@ -2098,24 +1815,37 @@
 
   .settings-btn {
     background: rgba(0, 0, 0, 0.2);
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     color: #fff;
     border-radius: 8px;
-    width: 36px; height: 36px;
+    width: 36px;
+    height: 36px;
     flex-shrink: 0;
-    display: flex; justify-content: center; align-items: center;
-    cursor: pointer; transition: all 0.2s ease;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
   }
 
-  .settings-btn:hover { background: rgba(0, 0, 0, 0.4); transform: scale(1.05); }
+  .settings-btn:hover {
+    background: rgba(0, 0, 0, 0.4);
+    transform: scale(1.05);
+  }
 
   .thinking-dot {
-    width: 0.5rem; height: 0.5rem; border-radius: 50%;
-    background: #6ad13f; box-shadow: 0 0 8px rgba(106, 209, 63, 0.9);
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: #6ad13f;
+    box-shadow: 0 0 8px rgba(106, 209, 63, 0.9);
     animation: thinkingPulse 1s ease-in-out infinite;
   }
 
-  @keyframes thinkingPulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.15); } }
+  @keyframes thinkingPulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1.15); }
+  }
 
   .analysis-loading-overlay {
     position: fixed;
@@ -2126,7 +1856,6 @@
     justify-content: center;
     background: rgba(15, 10, 6, 0.25);
     backdrop-filter: blur(4px) saturate(105%);
-    -webkit-backdrop-filter: blur(4px) saturate(105%);
   }
 
   .loading-content {
@@ -2170,7 +1899,9 @@
     animation-duration: 2s;
   }
 
-  @keyframes spinRing { to { transform: rotate(360deg); } }
+  @keyframes spinRing {
+    to { transform: rotate(360deg); }
+  }
 
   .loading-title {
     font-family: serif;
@@ -2181,7 +1912,6 @@
     font-size: 1.05rem;
     margin: 0;
     text-align: center;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
   }
 
   .loading-subtitle {
@@ -2219,7 +1949,6 @@
   }
 
   .loading-tip {
-    font-family: 'Inter', sans-serif;
     font-size: 0.78rem;
     color: rgba(244, 240, 227, 0.65);
     text-align: center;
@@ -2237,19 +1966,15 @@
     font-weight: 600;
     font-size: 0.85rem;
     cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease;
   }
 
-  .cancel-import-btn:hover {
-    background: rgba(255, 60, 60, 0.22);
-    border-color: rgba(255, 107, 107, 0.55);
-  }
-
-  .loading-fade-enter-active, .loading-fade-leave-active {
+  .loading-fade-enter-active,
+  .loading-fade-leave-active {
     transition: opacity 0.35s ease;
   }
 
-  .loading-fade-enter-from, .loading-fade-leave-to {
+  .loading-fade-enter-from,
+  .loading-fade-leave-to {
     opacity: 0;
   }
 
@@ -2291,10 +2016,13 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     margin: 0.4rem 0 0 0;
     flex-wrap: wrap;
-    position: relative;
   }
 
-  .reverse, .undo, .redo, .jumpstart, .jumpend {
+  .reverse,
+  .undo,
+  .redo,
+  .jumpstart,
+  .jumpend {
     background-color: var(--btn-idle);
     width: clamp(35px, 8vw, 40px);
     height: clamp(35px, 8vw, 40px);
@@ -2307,171 +2035,211 @@
     flex-shrink: 0;
   }
 
-  .reverse:disabled, 
-  .undo:disabled, 
-  .redo:disabled, 
-  .jumpstart:disabled, 
+  .reverse:disabled,
+  .undo:disabled,
+  .redo:disabled,
+  .jumpstart:disabled,
   .jumpend:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
-  .reverse:hover:not(:disabled), 
-  .undo:hover:not(:disabled), 
-  .redo:hover:not(:disabled), 
-  .reset:hover, 
-  .jumpstart:hover:not(:disabled), 
+  .reverse:hover:not(:disabled),
+  .undo:hover:not(:disabled),
+  .redo:hover:not(:disabled),
+  .jumpstart:hover:not(:disabled),
   .jumpend:hover:not(:disabled) {
-      background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
-      border-color: rgba(232, 232, 208, 0.6);
-      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
   }
 
-  .blackeval, .whiteeval {
-      width: 100%;
-      transition: all 0.5s ease;
-      position: relative;
+  .blackeval,
+  .whiteeval {
+    width: 100%;
+    transition: all 0.5s ease;
+    position: relative;
   }
 
-  .blackeval { background-color: #38412e; }
-  .whiteeval { background-color: #626949; }
+  .blackeval {
+    background-color: #38412e;
+  }
+
+  .whiteeval {
+    background-color: #626949;
+  }
 
   .evalnum {
-      font-family: "JetBrains Mono", monospace;
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: clamp(0.62rem, 1vw, 0.85rem);
-      font-weight: 600;
-      color: #fff8ef;
-      text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.6);
-      background: rgba(0, 0, 0, 0.3);
-      padding: 0.25rem 0.4rem;
-      border-radius: 6px;
-      backdrop-filter: blur(4px);
-      z-index: 10;
-      white-space: nowrap;
-      width: max-content;
+    font-family: "JetBrains Mono", monospace;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: clamp(0.62rem, 1vw, 0.85rem);
+    font-weight: 600;
+    color: #fff8ef;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+    backdrop-filter: blur(4px);
+    z-index: 10;
+    white-space: nowrap;
+    width: max-content;
   }
 
   .accuracydescribtion {
-      font-weight: 500;
-      text-align: center;
-      font-size: clamp(1rem, 2.1vw, 1.2rem);
-      margin-top: 1rem;
-      padding: 0 1rem;
-      word-wrap: break-word;
+    font-weight: 500;
+    text-align: center;
+    font-size: clamp(1rem, 2.1vw, 1.2rem);
+    margin-top: 1rem;
+    padding: 0 1rem;
+    word-wrap: break-word;
   }
 
   .bestmove {
-      color: #41a24e;
-      text-align: center;
-      font-weight: 600;
-      margin-top: 0.1rem;
-      font-size: clamp(0.9rem, 1rem, 1.1rem);
-      padding: 0 1rem;
-      cursor: pointer;
-      text-decoration: underline;
+    color: #41a24e;
+    text-align: center;
+    font-weight: 600;
+    margin-top: 0.1rem;
+    font-size: clamp(0.9rem, 1rem, 1.1rem);
+    padding: 0 1rem;
+    cursor: pointer;
+    text-decoration: underline;
   }
 
-  .move-data { padding: 0 1rem; }
+  .move-data {
+    padding: 0 1rem;
+  }
 
   .depthnum {
-      font-family: 'Inter', sans-serif;
-      text-align: center;
-      color: rgba(245, 245, 220, 0.7);
-      font-size: 0.78rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      margin: 0.3rem 0 0.5rem;
+    text-align: center;
+    color: rgba(245, 245, 220, 0.7);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin: 0.3rem 0 0.5rem;
   }
 
-  .line, .secondline {
-      font-family: "JetBrains Mono", monospace;
-      display: flex;
-      white-space: nowrap;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: clamp(0.85rem, 2vw, 1rem);
-      padding: 0.5rem;
-      margin: 8px 0;
-      background: rgba(0, 0, 0, 0.25);
-      border-radius: 10px;
-      color: #eae4d8;
-      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4);
-      overflow-x: auto;
-      scrollbar-width: thin;
-      scrollbar-color: rgba(0, 0, 0, 0.3)  rgba(0, 0, 0, 0.1); 
+  .line,
+  .secondline {
+    font-family: "JetBrains Mono", monospace;
+    display: flex;
+    white-space: nowrap;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: clamp(0.85rem, 2vw, 1rem);
+    padding: 0.5rem;
+    margin: 8px 0;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 10px;
+    color: #eae4d8;
+    box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4);
+    overflow-x: auto;
   }
 
-  .evalnum2, .evalnum3 {
-      font-size: clamp(1rem, 2vw, 1.3rem);
-      color: #171717;
-      background-color: #606847;
-      border-radius: 10px;
-      flex-shrink: 0;
-      min-width: 4.4rem;
-      width: auto;
-      padding: 0 0.5rem;
-      text-align: center;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+  /* Custom Scrollbar Styles for Analysis Lines */
+  .pretty-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) rgba(0, 0, 0, 0.15);
+  }
+
+  .pretty-scroll::-webkit-scrollbar {
+    height: 5px;
+  }
+
+  .pretty-scroll::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 10px;
+  }
+
+  .pretty-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+  }
+
+  .pretty-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.35);
+  }
+
+  .evalnum2,
+  .evalnum3 {
+    font-size: clamp(1rem, 2vw, 1.3rem);
+    color: #171717;
+    background-color: #606847;
+    border-radius: 10px;
+    flex-shrink: 0;
+    min-width: 4.4rem;
+    width: auto;
+    padding: 0 0.5rem;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .board-acc-icon {
-      position: absolute;
-      width: 4.5%;
-      height: 4.5%;
-      border-radius: 50%;
-      pointer-events: none;
+    position: absolute;
+    width: 4.5%;
+    height: 4.5%;
+    border-radius: 50%;
+    pointer-events: none;
   }
 
-  .line-move { cursor: pointer; padding: 0 2px; border-radius: 4px; }
-  .line-move:hover { background: rgba(103, 122, 228, 0.3); }
+  .line-move {
+    cursor: pointer;
+    padding: 0 2px;
+    border-radius: 4px;
+  }
+
+  .line-move:hover {
+    background: rgba(103, 122, 228, 0.3);
+  }
 
   .sharebar {
-      display: flex;
-      justify-content: center;
-      gap: 0.6rem;
-      margin-top: 0.9rem;
-      padding: 0 1rem;
+    display: flex;
+    justify-content: center;
+    gap: 0.6rem;
+    margin-top: 0.9rem;
+    padding: 0 1rem;
   }
 
   .sharebtn {
-      background: rgba(0, 0, 0, 0.22);
-      color: #f4f0e3;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 8px;
-      padding: 0.4rem 0.8rem;
-      font-size: 0.82rem;
-      font-weight: 600;
-      cursor: pointer;
+    background: rgba(0, 0, 0, 0.22);
+    color: #f4f0e3;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
   }
 
-  .sharebtn:hover { background: rgba(103, 122, 228, 0.3); }
+  .sharebtn:hover {
+    background: rgba(103, 122, 228, 0.3);
+  }
 
   .toast {
-      position: fixed;
-      bottom: 1.5rem;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(20, 20, 20, 0.92);
-      color: #f4f0e3;
-      padding: 0.6rem 1.2rem;
-      border-radius: 999px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-      z-index: 1000;
+    position: fixed;
+    bottom: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 20, 0.92);
+    color: #f4f0e3;
+    padding: 0.6rem 1.2rem;
+    border-radius: 999px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    z-index: 1000;
   }
 
-  .toast-fade-enter-active, .toast-fade-leave-active {
-      transition: opacity 0.25s ease, transform 0.25s ease;
+  .toast-fade-enter-active,
+  .toast-fade-leave-active {
+    transition: opacity 0.25s ease, transform 0.25s ease;
   }
 
-  .toast-fade-enter-from, .toast-fade-leave-to {
-      opacity: 0;
-      transform: translateX(-50%) translateY(8px);
+  .toast-fade-enter-from,
+  .toast-fade-leave-to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
   }
 
   .context-menu {
@@ -2497,8 +2265,13 @@
     cursor: pointer;
   }
 
-  .context-menu-item.delete { color: #ff6b6b; }
-  .context-menu-item.delete:hover { background: rgba(255, 60, 60, 0.2); }
+  .context-menu-item.delete {
+    color: #ff6b6b;
+  }
+
+  .context-menu-item.delete:hover {
+    background: rgba(255, 60, 60, 0.2);
+  }
 
   .report {
     padding: 1rem;
@@ -2532,7 +2305,6 @@
     color: #f5f5dc;
     font-size: 0.78rem;
     margin-bottom: 0.5rem;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
   }
 
   .side-swatch {
@@ -2544,8 +2316,13 @@
     flex-shrink: 0;
   }
 
-  .white-swatch { background: #f4f0e3; }
-  .black-swatch { background: #1a1a1a; }
+  .white-swatch {
+    background: #f4f0e3;
+  }
+
+  .black-swatch {
+    background: #1a1a1a;
+  }
 
   .accuracy-score {
     font-family: "JetBrains Mono", monospace;
@@ -2554,7 +2331,6 @@
     color: #a8d97a;
     text-align: center;
     margin: 0.4rem 0 0.7rem;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   }
 
   .accuracy-score.empty {
@@ -2642,7 +2418,6 @@
     flex-shrink: 0;
   }
 
-  /* Prettier Explorer Styling */
   .explorer {
     padding: 0.6rem 0.8rem 1rem;
     box-sizing: border-box;
@@ -2651,7 +2426,6 @@
   .explorer-status {
     text-align: center;
     color: rgba(245, 245, 220, 0.7);
-    font-family: 'Inter', sans-serif;
     font-size: 0.9rem;
     padding: 2rem 1rem;
     display: flex;
@@ -2660,12 +2434,14 @@
     gap: 0.5rem;
   }
 
-  .explorer-status.error { color: #ffb0a8; }
+  .explorer-status.error {
+    color: #ffb0a8;
+  }
 
   .mini-spinner {
     width: 16px;
     height: 16px;
-    border: 2px solid rgba(255,255,255,0.2);
+    border: 2px solid rgba(255, 255, 255, 0.2);
     border-top-color: var(--text-highlight);
     border-radius: 50%;
     animation: spinRing 1s linear infinite;
@@ -2709,7 +2485,7 @@
 
   .explorer-row {
     display: grid;
-    grid-template-columns: 3rem 4.2rem 1fr;
+    grid-template-columns: 2.8rem 1fr 1.8fr;
     align-items: center;
     gap: 0.6rem;
     padding: 0.55rem 0.7rem;
@@ -2755,23 +2531,26 @@
   .col-games {
     display: flex;
     flex-direction: column;
-    line-height: 1.15;
+    line-height: 1.1;
+    align-items: flex-start;
   }
 
   .games-percent {
     font-family: "JetBrains Mono", monospace;
     font-weight: 700;
-    font-size: 0.9rem;
+    font-size: 0.92rem;
     color: #f4f0e3;
   }
 
   .games-count {
     font-family: "JetBrains Mono", monospace;
-    font-size: 0.72rem;
-    color: rgba(244, 240, 227, 0.5);
+    font-size: 0.7rem;
+    color: rgba(244, 240, 227, 0.45);
   }
 
-  .col-split { min-width: 0; }
+  .col-split {
+    min-width: 0;
+  }
 
   .split-bar {
     display: flex;
@@ -2779,17 +2558,27 @@
     height: 1.5rem;
     border-radius: 8px;
     overflow: hidden;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.4);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
   }
 
-  .split-white, .split-draw, .split-black {
+  .split-white,
+  .split-draw,
+  .split-black {
     height: 100%;
     transition: width 0.3s ease;
   }
 
-  .split-white { background: #e8e4d8; }
-  .split-draw  { background: #8a8a86; }
-  .split-black { background: #2b2b2b; }
+  .split-white {
+    background: #e8e4d8;
+  }
+
+  .split-draw {
+    background: #8a8a86;
+  }
+
+  .split-black {
+    background: #2b2b2b;
+  }
 
   .explorer-db-toggle {
     display: flex;
@@ -2813,31 +2602,11 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     transition: all 0.2s ease;
-    font-family: 'Inter', sans-serif;
   }
 
   .explorer-db-toggle button.active {
     background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
     color: #f4f0e3;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-  }
-
-  /* Perfect text alignment for billions of games */
-  .explorer-row {
-    grid-template-columns: 2.8rem 1fr 1.8fr; 
-  }
-
-  .col-games {
-    align-items: flex-start;
-    line-height: 1.1;
-  }
-
-  .games-percent {
-    font-size: 0.92rem;
-  }
-
-  .games-count {
-    font-size: 0.7rem;
-    color: rgba(244, 240, 227, 0.45);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   }
 </style>

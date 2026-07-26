@@ -71,7 +71,6 @@
       📊 Insights
     </button>
 
-    <!-- Disabled VS Computer -->
     <button
       class="btn tooltip-btn"
       :style="{ background: `linear-gradient(${bgColor('computer')})` }"
