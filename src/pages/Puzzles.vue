@@ -28,10 +28,22 @@
   const status = ref('idle') // 'idle', 'correct', 'wrong'
   const activeTab = ref('puzzle')
 
+  // Per-puzzle flags
+  const puzzleRated = ref(false)
+  const puzzleSolved = ref(false)
+
+  // The specific square of the move that was marked correct, so the green
+  // checkmark stays anchored to that move even if the user later navigates
+  // through the analysis tree (which updates lastMoveSquare).
+  const correctMoveSquare = ref(null)
+
+  // Arrow drawn on the board showing the opponent's best refutation after a
+  // wrong move by the user.
+  const wrongMoveArrowSquares = ref(null)
+
   // Analysis unlocks as soon as the puzzle is solved correctly or the solution is shown.
-  // NOTE: previously this also unlocked on a wrong move (status !== 'idle'); now a wrong
-  // move alone does not reveal analysis — only 'correct' or solutionShown do.
-  const canViewAnalysis = computed(() => status.value === 'correct' || solutionShown.value)
+  // It stays unlocked via puzzleSolved even if the user undoes moves.
+  const canViewAnalysis = computed(() => status.value === 'correct' || solutionShown.value || puzzleSolved.value)
 
   // --- Played Move Info ---
   const playedMoveSan = ref('')
@@ -311,20 +323,16 @@
   function undoMoveAndResetStatus() {
     undoMove()
     status.value = 'idle'
+    correctMoveSquare.value = null
     activeTab.value = 'puzzle'
     if (boardAPI.value) {
       boardAPI.value.hideMoves()
       updateBoardArrows()
     }
-    // Analysis is locked again now that status is back to 'idle'; this just clears
-    // any stale moveData rather than re-triggering an engine call (getAccuracy no-ops
-    // when analysis isn't unlocked and checkSolution isn't requested).
     getAccuracy()
   }
 
   // Resets the CURRENT puzzle back to its starting position (same puzzle, fresh attempt).
-  // Used when the user taps/moves on the board after a wrong-move result, instead of
-  // requiring them to press "Try Again".
   function resetPuzzleAfterWrong() {
     if (!currentPuzzle.value) return
 
@@ -344,12 +352,14 @@
     status.value = 'idle'
     solutionShown.value = false
     hintShown.value = false
-    hintUsed.value = false
+    // Note: hintUsed intentionally NOT reset, so penalty persists if they use it again
     hintSquare.value = null
     moveData.value = null
     lastMoveSquare.value = null
     lastMoveAccuracy.value = null
     isAccuracy.value = ''
+    correctMoveSquare.value = null
+    wrongMoveArrowSquares.value = null
     activeTab.value = 'puzzle'
 
     if (boardAPI.value) {
@@ -364,8 +374,17 @@
     lastMoveAccuracy.value = null
     if (currentNode.value.children.length === 0) return
     const nextNode = currentNode.value.children[0]
-    let sanMove
-    try { sanMove = chess.move(nextNode.uci) } catch (e) { sanMove = null }
+    
+    let sanMove = null
+    try {
+      const from = nextNode.uci.slice(0, 2)
+      let to = nextNode.uci.slice(2, 4)
+      const promotion = nextNode.uci.length > 4 ? nextNode.uci[4] : undefined
+      const castlingFix = { 'e1h1': 'g1', 'e1a1': 'c1', 'e8h8': 'g8', 'e8a8': 'c8' }
+      if (castlingFix[nextNode.uci]) to = castlingFix[nextNode.uci]
+      sanMove = chess.move({ from, to, promotion: promotion ?? undefined })
+    } catch (e) { sanMove = null }
+
     if (sanMove) soundForLastMove(sanMove)
     movesListUCI.value.push(nextNode.uci)
     currentNode.value = nextNode
@@ -388,7 +407,14 @@
 
     chess.load(moveTree.fen)
     for (const uci of uciMoves) {
-      try { chess.move(uci) } catch (e) { console.warn("Failed to apply UCI in jumpToNode", uci, e) }
+      try {
+        const from = uci.slice(0, 2)
+        let to = uci.slice(2, 4)
+        const promotion = uci.length > 4 ? uci[4] : undefined
+        const castlingFix = { 'e1h1': 'g1', 'e1a1': 'c1', 'e8h8': 'g8', 'e8a8': 'c8' }
+        if (castlingFix[uci]) to = castlingFix[uci]
+        chess.move({ from, to, promotion: promotion ?? undefined })
+      } catch (e) { console.warn("Failed to apply UCI in jumpToNode", uci, e) }
     }
 
     movesListUCI.value = uciMoves
@@ -597,11 +623,17 @@
     hintSquare.value = null
     activeTab.value = 'puzzle'
 
+    // Reset per-puzzle flags for the new puzzle
+    puzzleRated.value = false
+    puzzleSolved.value = false
+    correctMoveSquare.value = null
+    wrongMoveArrowSquares.value = null
+
     // Reset tree entirely for new puzzle
     chess.load(currentPuzzle.value.fen)
     moveTree.fen = currentPuzzle.value.fen
     moveTree.children = []
-    moveTree.analysisData = null // Ensure stale cache isn't kept from the previous puzzle
+    moveTree.analysisData = null
     moveTree.accuracy = null
     nodeIdCounter = 1
     for (const key in nodeMap) {
@@ -620,7 +652,6 @@
       boardAPI.value.setPosition(currentPuzzle.value.fen)
       boardAPI.value.hideMoves()
       
-      // Delay board arrows slightly to ensure board has rendered the new FEN first
       setTimeout(() => {
         updateBoardArrows()
       }, 50)
@@ -652,12 +683,16 @@
     }
 
     // If the puzzle was just failed and the solution hasn't been revealed, any further
-    // interaction with the board (drag or click-move) resets the puzzle back to the
-    // start instead of applying a move on top of the failed attempt.
+    // interaction with the board resets the puzzle back to the start.
     if (status.value === 'wrong' && !solutionShown.value) {
       boardAPI.value.setPosition(currentNode.value.fen)
       resetPuzzleAfterWrong()
       return
+    }
+
+    // If they make a move after solving, clear the checkmark so it doesn't persist incorrectly
+    if (status.value === 'correct') {
+      correctMoveSquare.value = null
     }
 
     if (boardAPI.value) {
@@ -696,18 +731,11 @@
 
     movesListUCI.value.push(uci)
     
-    // Only check the puzzle solution if the puzzle hasn't been completed yet ('idle')
     const shouldCheckSolution = (status.value === 'idle')
     await getAccuracy(shouldCheckSolution)
   }
 
   async function getAccuracy(checkSolution = false) {
-    // Analysis (eval bar, best lines, move classification) stays hidden until the puzzle
-    // is solved or the solution is shown. The one exception is the solution-check call
-    // itself (checkSolution === true), which still needs to run the engine to determine
-    // whether the played move was correct — but its results won't be surfaced to the UI
-    // (moveData etc.) unless canViewAnalysis is true by the time it resolves, i.e. the
-    // move turned out to be correct.
     if (!checkSolution && !canViewAnalysis.value) {
       return
     }
@@ -778,8 +806,6 @@
           checkPuzzleSolution(result)
         }
 
-        // Only surface the result to the UI if analysis is (now) allowed to be seen —
-        // i.e. the puzzle was just solved correctly, or the solution has been shown.
         if (!canViewAnalysis.value) {
           isAnalyzing.value = false
           return
@@ -815,20 +841,26 @@
     const playedUci = currentNode.value.uci
     const dbBestMove = currentPuzzle.value.bestMove
 
-    // BUG FIX: Normalize engine castling targets to match standard board UCI
     const castlingFix = { 'e1h1': 'e1g1', 'e1a1': 'e1c1', 'e8h8': 'e8g8', 'e8a8': 'e8c8' }
     const normalizedDbBestMove = castlingFix[dbBestMove] || dbBestMove
 
-    if (['brilliant', 'great', 'best', 'excellent'].includes(acc) || playedUci === normalizedDbBestMove) {
+    // Added 'good' to the list of acceptable passing moves
+    if (['brilliant', 'great', 'best', 'excellent', 'good'].includes(acc) || playedUci === normalizedDbBestMove) {
       streak.value += 1
       const basePoints = hintUsed.value ? 8 : 15
       const streakBonus = hintUsed.value ? 0 : (streak.value - 1) * 2
       const totalPoints = basePoints + streakBonus
 
       status.value = 'correct'
+      puzzleSolved.value = true
+      correctMoveSquare.value = playedUci?.slice(2, 4) ?? null
       sessionStats.value.solved++
-      updateRating(totalPoints)
-      popRatingDelta(totalPoints)
+      
+      if (!puzzleRated.value) {
+        updateRating(totalPoints)
+        popRatingDelta(totalPoints)
+        puzzleRated.value = true
+      }
       playSound('correct')
       
       if (currentUser.value && currentPuzzle.value.gameId && currentPuzzle.value.indexInArray !== undefined) {
@@ -838,28 +870,44 @@
       }
     } else {
       streak.value = 0
-      updateRating(-10)
-      popRatingDelta(-10)
+      if (!puzzleRated.value) {
+        updateRating(-10)
+        popRatingDelta(-10)
+        puzzleRated.value = true
+      }
       playSound('wrong')
       sessionStats.value.failed++
       status.value = 'wrong'
 
-      // Auto-reset shortly after showing the wrong-move indicator, so the puzzle
-      // is immediately retryable without requiring a tap or button press. Skipped
-      // if the user reveals the solution during the brief window.
+      try {
+        const refutationUci = result?.best_line?.[0]
+        if (refutationUci) {
+          const tempChess = new Chess(currentNode.value.fen)
+          const refMove = tempChess.move(refutationUci, { sloppy: true })
+          if (refMove) {
+            wrongMoveArrowSquares.value = { from: refMove.from, to: refMove.to }
+          }
+        }
+      } catch (e) {
+        wrongMoveArrowSquares.value = null
+      }
+
       setTimeout(() => {
         if (status.value === 'wrong' && !solutionShown.value) {
           resetPuzzleAfterWrong()
         }
-      }, 900)
+      }, 1800)
     }
   }
 
   function showSolution() {
     if (status.value === 'idle') {
       streak.value = 0
-      updateRating(-10)
-      popRatingDelta(-10)
+      if (!puzzleRated.value) {
+        updateRating(-10)
+        popRatingDelta(-10)
+        puzzleRated.value = true
+      }
       sessionStats.value.failed++
       status.value = 'wrong'
     }
@@ -868,10 +916,9 @@
     if (boardAPI.value && currentPuzzle.value) {
       const bestUci = currentPuzzle.value.bestMove
       const from = bestUci.slice(0, 2)
-      let to = bestUci.slice(2, 4) // Changed to let
+      let to = bestUci.slice(2, 4)
       const promotion = bestUci.length > 4 ? bestUci[4] : undefined
       
-      // BUG FIX: Translate castling coordinates so chess.js doesn't crash
       const castlingFix = { 'e1h1': 'g1', 'e1a1': 'c1', 'e8h8': 'g8', 'e8a8': 'c8' }
       if (castlingFix[bestUci]) to = castlingFix[bestUci]
 
@@ -909,6 +956,10 @@
       shapes.push({ orig: bestArrowSquares.value.from, dest: bestArrowSquares.value.to, brush: 'green' })
     }
 
+    if (status.value === 'wrong' && !solutionShown.value && wrongMoveArrowSquares.value) {
+      shapes.push({ orig: wrongMoveArrowSquares.value.from, dest: wrongMoveArrowSquares.value.to, brush: 'red' })
+    }
+
     boardAPI.value.setShapes(shapes)
   }
 
@@ -930,8 +981,8 @@
   }
 
   function uciSecondLine() {
-    if (!moveData.value?.excellent_line) return
     excellentSanLine.value = []
+    if (!moveData.value?.excellent_line) return
     let secondLineNum = 0
     excellentChess.load(chess.fen())
     for (let i = 0; i < 30; i++) {
@@ -945,8 +996,8 @@
   }
 
   function uciThirdLine() {
-    if (!moveData.value?.third_line) return
     thirdSanLine.value = []
+    if (!moveData.value?.third_line) return
     let thirdLineNum = 0
     thirdChess.load(chess.fen())
     for (let i = 0; i < 30; i++) {
@@ -1109,8 +1160,9 @@
                 :board-config="{ coordinates: true, animation: { enabled: false } }"
               />
 
-              <!-- Status or Move Classification Icon -->
-              <svg v-if="status === 'correct' && lastMoveSquare && activeTab === 'puzzle'" class="board-acc-icon status-icon" viewBox="0 0 24 24" :style="accuracyIconStyle(lastMoveSquare)">
+              <!-- Correct checkmark: anchored to the specific move that was correct,
+                   not just any move shown while status === 'correct'. -->
+              <svg v-if="status === 'correct' && correctMoveSquare && activeTab === 'puzzle'" class="board-acc-icon status-icon" viewBox="0 0 24 24" :style="accuracyIconStyle(correctMoveSquare)">
                  <circle cx="12" cy="12" r="10" fill="#6ad13f" />
                  <path d="M7 13l3 3 7-7" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
               </svg>
@@ -1256,14 +1308,14 @@
               </div>
 
               <div class="secondline" v-if="excellentSanLine.length">
-                <span class="evalnum3">{{ moveData?.excellent_eval != null ? (moveData.excellent_eval / 100).toFixed(2) : "" }}</span>
+                <span class="evalnum3">{{ moveData?.excellent_eval != null ? formatEval(moveData.excellent_eval) : "" }}</span>
                 <span v-for="(move, idx) in excellentSanLine" :key="'exc-' + idx" class="line-move" @click="playLineMoves(moveData.excellent_line, idx + 1)">
                   {{ prettyMove(move) }}&nbsp;
                 </span>
               </div>
 
               <div class="secondline" v-if="thirdSanLine.length">
-                <span class="evalnum3">{{ moveData?.third_eval != null ? (moveData.third_eval / 100).toFixed(2) : "" }}</span>
+                <span class="evalnum3">{{ moveData?.third_eval != null ? formatEval(moveData.third_eval) : "" }}</span>
                 <span v-for="(move, idx) in thirdSanLine" :key="'third-' + idx" class="line-move" @click="playLineMoves(moveData.third_line, idx + 1)">
                   {{ prettyMove(move) }}&nbsp;
                 </span>

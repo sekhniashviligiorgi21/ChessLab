@@ -2791,7 +2791,6 @@
   .split-draw  { background: #8a8a86; }
   .split-black { background: #2b2b2b; }
 
-  /* Prettier Explorer UI & Toggle */
   .explorer-db-toggle {
     display: flex;
     gap: 4px;

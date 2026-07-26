@@ -11,15 +11,14 @@
 <style>
 
   :root, [data-theme="brown"] {
-    --bg-1: #1f1612; --bg-2: #2a1d16; --bg-3: #36251b;
-    --panel-1: #3a2a1f; --panel-2: #251a13;
-    --list-1: #4a3429; --list-2: #322217;
-    --btn-active: #8a5a3b; --btn-idle: #5c3e2a;
-    /* Made active buttons significantly brighter and idle buttons darker */
-    --title-btn-active-1: #d4a373; --title-btn-active-2: #a87045;
-    --title-btn-idle-1: #3e2a1c; --title-btn-idle-2: #2a1c12;
-    --text-highlight: #f0d8a8;
-    --board-light: #e8d5b5; --board-dark: #b58863;
+    --bg-1: #241a12; --bg-2: #3a2818; --bg-3: #58402a;
+    --panel-1: #4a3320; --panel-2: #2e2013;
+    --list-1: #6b4b30; --list-2: #4a3320;
+    --btn-active: #2a1c10; --btn-idle: #6b4b30;
+    --title-btn-active-1: #2c3e2e; --title-btn-active-2: #1b261c;
+    --title-btn-idle-1: #4a634a; --title-btn-idle-2: #2c3e2e;
+    --text-highlight: #f0d0a3;
+    --board-light: #e0c99a; --board-dark: #452f1d;
   }
 
   [data-theme="midnight"] {
@@ -38,14 +37,14 @@
   }
 
   [data-theme="wood"] {
-    --bg-1: #241a12; --bg-2: #3a2818; --bg-3: #58402a;
-    --panel-1: #4a3320; --panel-2: #2e2013;
-    --list-1: #6b4b30; --list-2: #4a3320;
-    --btn-active: #2a1c10; --btn-idle: #6b4b30;
-    --title-btn-active-1: #2c3e2e; --title-btn-active-2: #1b261c;
-    --title-btn-idle-1: #4a634a; --title-btn-idle-2: #2c3e2e;
-    --text-highlight: #f0d0a3;
-    --board-light: #e0c99a; --board-dark: #452f1d;
+    --bg-1: #1f1612; --bg-2: #2a1d16; --bg-3: #36251b;
+    --panel-1: #3a2a1f; --panel-2: #251a13;
+    --list-1: #4a3429; --list-2: #322217;
+    --btn-active: #8a5a3b; --btn-idle: #5c3e2a;
+    --title-btn-active-1: #d4a373; --title-btn-active-2: #a87045;
+    --title-btn-idle-1: #3e2a1c; --title-btn-idle-2: #2a1c12;
+    --text-highlight: #f0d8a8;
+    --board-light: #e8d5b5; --board-dark: #b58863;
   }
 
   [data-theme="blue"] {
@@ -89,7 +88,7 @@
     --title-btn-active-1: #331e1e; --title-btn-active-2: #1e1212;
     --title-btn-idle-1: #4a3232; --title-btn-idle-2: #331e1e;
     --text-highlight: #f0a898;
-    --board-light: #f0ddd3; --board-dark: #b06a58;
+    --board-light: #f0ddd3; --board-dark: #59101c;
   }
 
   [data-theme="slate"] {
