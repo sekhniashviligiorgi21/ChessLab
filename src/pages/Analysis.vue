@@ -127,16 +127,19 @@
     explorerLoading.value = true
     explorerError.value = ""
     const uciList = movesListUCI.value
+    
     if (uciList.length > 40) {
-      explorerLoading.value = false
       opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
+      explorerLoading.value = false // <--- ADD THIS LINE
       return
     }
+    
     const bookList = uciList.join(",")
     const dbParam = explorerDb.value
     const url = bookList
       ? `../../api/explorer?db=${dbParam}&play=${encodeURIComponent(bookList)}`
       : `../../api/explorer?db=${dbParam}`
+      
     try {
       const response = await fetch(url)
       if (response.status === 204) {
@@ -186,6 +189,9 @@
       explorerError.value = "No connection to explorer"
       explorerStats.value = null
       explorerMoves.value = []
+    } finally {
+      // <--- ADD THIS FINALLY BLOCK
+      explorerLoading.value = false
     } 
   }
 
