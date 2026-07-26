@@ -132,7 +132,7 @@
       opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
       return
     }
-    const bookList = uciList.join(", ")
+    const bookList = uciList.join(",")
     const dbParam = explorerDb.value
     const url = bookList
       ? `../../api/explorer?db=${dbParam}&play=${encodeURIComponent(bookList)}`
@@ -1229,7 +1229,7 @@
   async function fetchOpeningNameForSave(uciList) {
     const OPENING_LOOKUP_PLIES = 12
     const playList = uciList.slice(0, OPENING_LOOKUP_PLIES)
-    const bookList = playList.join(", ")
+    const bookList = playList.join(",")
     const url = bookList
       ? `../../api/explorer?db=masters&play=${encodeURIComponent(bookList)}`
       : `../../api/explorer?db=masters`
