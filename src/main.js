@@ -1,7 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import { createRouter, createWebHistory } from 'vue-router'
-import { createGtag } from 'vue-gtag' // 👈 1. Change to curly braces named import
+import { createGtag } from 'vue-gtag' 
 
 import Analysis from './pages/Analysis.vue'
 import Review from './pages/Review.vue'
@@ -24,7 +24,6 @@ const router = createRouter({
 
 const app = createApp(App)
 
-// 👈 2. Use createGtag function constructor instead of app.use variable approach
 app.use(
   createGtag({
     config: { id: "G-GYKFRBMF29" }
