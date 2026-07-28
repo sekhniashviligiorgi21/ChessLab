@@ -1,9 +1,11 @@
 <script setup>
   import { ref } from 'vue' 
   import AuthWidget from './assets/AuthWidget.vue'
+  import { Analytics } from '@vercel/analytics/vue';
 </script>
 
 <template>
+  <Analytics />
   <AuthWidget/>
   <RouterView/>
 </template>
