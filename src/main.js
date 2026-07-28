@@ -1,22 +1,20 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import { createRouter, createWebHistory } from 'vue-router'
+import VueGtag from 'vue-gtag' // 
+
 import Analysis from './pages/Analysis.vue'
 import Review from './pages/Review.vue'
 import Play from './pages/Play.vue'
 import Insights from './pages/Insights.vue'
 import Puzzles from './pages/Puzzles.vue'
-import router from './router'
-import { inject } from '@vercel/analytics'
-
-inject()
 
 const routes = [
 	{ path: "/", component: Analysis },
 	{ path: "/Review", component: Review },
 	{ path: "/Insights", component: Insights },
 	{ path: "/vsComputer", component: Play }, 
-	{path: '/Puzzles', name: 'Puzzles', component: Puzzles}
+	{ path: '/Puzzles', name: 'Puzzles', component: Puzzles}
 ]
 
 const router = createRouter({
@@ -27,5 +25,12 @@ const router = createRouter({
 export default router
 
 const app = createApp(App)
+
+app.use(VueGtag, {
+  config: { 
+    id: "G-GYKFRBMF29" 
+  }
+}, router) 
+
 app.use(router)
 app.mount('#app')
