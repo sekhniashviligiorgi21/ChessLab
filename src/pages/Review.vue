@@ -139,13 +139,33 @@
     importSite.value === 'pgn' || importSite.value === 'fen' || importSite.value === 'library'
   )
 
+  // --- NEW: Helper to clean PGNs before chess.js parses them ---
+  // Strips comments { ... }, variations ( ... ), NAGs ($1), and extra whitespace
+  function cleanPgn(pgn) {
+    if (!pgn) return ''
+    let cleaned = pgn
+      .replace(/\{[^}]*\}/g, ' ')  // Remove comments
+      .replace(/\$\d+/g, ' ')       // Remove NAGs
+      
+    // Remove nested variations
+    let prev
+    do {
+      prev = cleaned
+      cleaned = cleaned.replace(/\([^()]*\)/g, ' ')
+    } while (cleaned !== prev)
+    
+    // Normalize whitespace
+    cleaned = cleaned.replace(/\s+/g, ' ').trim()
+    return cleaned
+  }
+
   function normalizeLichess(line) {
     const lGame = JSON.parse(line)
     let wRes = 'draw', bRes = 'draw'
     if (lGame.winner === 'white') { wRes = 'win'; bRes = 'lose' }
     else if (lGame.winner === 'black') { wRes = 'lose'; bRes = 'win' }
     return {
-      pgn: lGame.pgn || "",
+      pgn: cleanPgn(lGame.pgn || ""), // Clean PGN immediately
       time_class: lGame.speed || "unknown",
       white: { username: lGame.players?.white?.user?.name || "Anonymous", rating: lGame.players?.white?.rating || 0, result: wRes },
       black: { username: lGame.players?.black?.user?.name || "Anonymous", rating: lGame.players?.black?.rating || 0, result: bRes }
@@ -196,11 +216,17 @@
 
   function buildGameFromPgn(pgn) {
     const c = new Chess()
-    try { c.loadPgn(pgn) } catch (e) { throw new Error('Could not parse that PGN.') }
+    const cleanedPgn = cleanPgn(pgn)
+    try { 
+      c.loadPgn(cleanedPgn) 
+    } catch (e) { 
+      console.error('chess.js loadPgn error:', e)
+      throw new Error('Could not parse that PGN. Please check the format.') 
+    }
     if (c.history().length === 0) throw new Error('No moves found in that PGN.')
     const headers = c.getHeaders?.() || {}
     return {
-      pgn,
+      pgn: cleanedPgn, // Save the cleaned PGN
       time_class: 'unknown',
       white: { username: headers.White || 'White', rating: Number(headers.WhiteElo) || 0, result: 'unknown' },
       black: { username: headers.Black || 'Black', rating: Number(headers.BlackElo) || 0, result: 'unknown' }
@@ -259,6 +285,11 @@
   }
 
   function selectGame(game) {
+    // Ensure the PGN is cleaned before processing to avoid chess.js errors
+    if (game && game.pgn) {
+      game.pgn = cleanPgn(game.pgn)
+    }
+    
     selectedGame.value = game
     gameUci.value = convertPgnToUci(game.pgn)
     reviewMoves.value = gameUci.value
@@ -273,9 +304,15 @@
   }
 
   function convertPgnToUci(pgn) {
-    if (!pgn) return []
+    const cleanedPgn = cleanPgn(pgn)
+    if (!cleanedPgn) return []
     const c = new Chess()
-    c.loadPgn(pgn)
+    try {
+      c.loadPgn(cleanedPgn)
+    } catch (e) {
+      console.error('convertPgnToUci PGN parse error:', e)
+      return []
+    }
     return c.history({ verbose: true }).map(move => {
       let uci = move.from + move.to
       if (move.promotion) uci += move.promotion
@@ -309,7 +346,7 @@
       myRating: me.rating || 0, 
       oppRating: opponent.rating || 0 
     }
-}
+  }
 
   async function analyseGame() {
     if (!selectedGame.value || gameUci.value.length === 0) return
