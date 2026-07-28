@@ -1,6 +1,9 @@
 <script setup>
   import { ref } from 'vue' 
   import AuthWidget from './assets/AuthWidget.vue'
+  import { inject } from '@vercel/analytics'
+  
+  inject()
 </script>
 
 <template>
