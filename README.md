@@ -107,4 +107,4 @@ Distributed under the MIT License. See LICENSE for details.
 🙏 Acknowledgments
 Lichess API for opening database integration and PGN utilities.
 
-Stockfish Engine for open-source engine evaluation.
+Stockfish 17.1-lite-single for open-source engine evaluation.
