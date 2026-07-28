@@ -1,11 +1,14 @@
 <script setup>
-  import { ref } from 'vue' 
+  import { onMounted } from 'vue'
+  import { inject } from '@vercel/analytics'
   import AuthWidget from './assets/AuthWidget.vue'
-  import { Analytics } from '@vercel/analytics/vue';
+
+  onMounted(() => {
+    inject()
+  })
 </script>
 
 <template>
-  <Analytics />
   <AuthWidget/>
   <RouterView/>
 </template>
