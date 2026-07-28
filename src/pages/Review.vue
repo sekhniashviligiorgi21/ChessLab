@@ -139,13 +139,13 @@
     importSite.value === 'pgn' || importSite.value === 'fen' || importSite.value === 'library'
   )
 
-  // --- NEW: Helper to clean PGNs before chess.js parses them ---
-  // Strips comments { ... }, variations ( ... ), NAGs ($1), and extra whitespace
+  // --- Helper to clean PGNs before chess.js parses them ---
   function cleanPgn(pgn) {
     if (!pgn) return ''
     let cleaned = pgn
-      .replace(/\{[^}]*\}/g, ' ')  // Remove comments
-      .replace(/\$\d+/g, ' ')       // Remove NAGs
+      .replace(/\{[^}]*\}/g, ' ')   // Remove comments
+      .replace(/\$\d+/g, ' ')        // Remove NAGs
+      .replace(/\s*e\.p\.\s*/g, ' ') // Remove en passant annotations
       
     // Remove nested variations
     let prev
@@ -165,7 +165,7 @@
     if (lGame.winner === 'white') { wRes = 'win'; bRes = 'lose' }
     else if (lGame.winner === 'black') { wRes = 'lose'; bRes = 'win' }
     return {
-      pgn: cleanPgn(lGame.pgn || ""), // Clean PGN immediately
+      pgn: cleanPgn(lGame.pgn || ""),
       time_class: lGame.speed || "unknown",
       white: { username: lGame.players?.white?.user?.name || "Anonymous", rating: lGame.players?.white?.rating || 0, result: wRes },
       black: { username: lGame.players?.black?.user?.name || "Anonymous", rating: lGame.players?.black?.rating || 0, result: bRes }
@@ -217,19 +217,88 @@
   function buildGameFromPgn(pgn) {
     const c = new Chess()
     const cleanedPgn = cleanPgn(pgn)
+    
+    // Helper to extract headers manually if standard parsing fails
+    const extractHeader = (key) => {
+      const match = new RegExp(`\\[${key} "(.*?)"\\]`).exec(pgn)
+      return match ? match[1] : ''
+    }
+
+    let parsedSuccessfully = false
     try { 
       c.loadPgn(cleanedPgn) 
+      if (c.history().length > 0) parsedSuccessfully = true
     } catch (e) { 
-      console.error('chess.js loadPgn error:', e)
-      throw new Error('Could not parse that PGN. Please check the format.') 
+      console.warn("Standard loadPgn failed, attempting fallback recovery...", e.message)
     }
-    if (c.history().length === 0) throw new Error('No moves found in that PGN.')
-    const headers = c.getHeaders?.() || {}
+
+    if (parsedSuccessfully) {
+      const headers = c.getHeaders?.() || {}
+      const whiteName = headers.White || extractHeader('White') || 'White'
+      const blackName = headers.Black || extractHeader('Black') || 'Black'
+      const whiteElo = headers.WhiteElo || extractHeader('WhiteElo')
+      const blackElo = headers.BlackElo || extractHeader('BlackElo')
+      const result = headers.Result || extractHeader('Result') || '*'
+
+      return {
+        pgn: cleanedPgn,
+        time_class: 'unknown',
+        white: { username: whiteName, rating: Number(whiteElo) || 0, result: result === '1-0' ? 'win' : (result === '0-1' ? 'lose' : 'draw') },
+        black: { username: blackName, rating: Number(blackElo) || 0, result: result === '0-1' ? 'win' : (result === '1-0' ? 'lose' : 'draw') }
+      }
+    }
+
+    // Fallback parser for malformed PGNs (e.g. missing half-moves)
+    c.reset()
+    const movesStr = cleanedPgn.replace(/\[.*?\]/gs, '').replace(/\d+\.(\.\.)?/g, ' ').replace(/(1-0|0-1|1\/2-1\/2|\*)/g, '').trim()
+    const moves = movesStr.split(/\s+/).filter(m => m.length > 0)
+    
+    let validMovesApplied = 0
+    for (let i = 0; i < moves.length; i++) {
+      const move = moves[i]
+      if (!move) continue
+      try {
+        c.move(move)
+        validMovesApplied++
+      } catch (err) {
+        // Toggle turn to see if a move was skipped
+        const fenParts = c.fen().split(' ')
+        fenParts[1] = fenParts[1] === 'w' ? 'b' : 'w'
+        fenParts[3] = '-' // Remove en passant target square
+        const newFen = fenParts.join(' ')
+        
+        try {
+          const tempBoard = new Chess(newFen)
+          tempBoard.move(move)
+          // It worked! Apply it to the main board
+          c.load(newFen)
+          c.move(move)
+          validMovesApplied++
+        } catch (err2) {
+          console.error(`Skipped unrecoverable invalid move: ${move}`)
+          break
+        }
+      }
+    }
+
+    if (validMovesApplied === 0) throw new Error('No valid moves found in that PGN. Please check the format.')
+
+    const whiteName = extractHeader('White') || 'White'
+    const blackName = extractHeader('Black') || 'Black'
+    const whiteElo = extractHeader('WhiteElo')
+    const blackElo = extractHeader('BlackElo')
+    const result = extractHeader('Result') || '*'
+
+    // Generate a clean PGN from the successfully parsed moves
+    const cleanMovesPgn = c.pgn()
+    const headerStr = `[White "${whiteName}"]\n[Black "${blackName}"]\n[Result "${result}"]${whiteElo ? `\n[WhiteElo "${whiteElo}"]` : ''}${blackElo ? `\n[BlackElo "${blackElo}"]` : ''}`
+    const finalPgn = `${headerStr}\n\n${cleanMovesPgn} ${result}`.trim()
+
     return {
-      pgn: cleanedPgn, // Save the cleaned PGN
+      pgn: finalPgn,
       time_class: 'unknown',
-      white: { username: headers.White || 'White', rating: Number(headers.WhiteElo) || 0, result: 'unknown' },
-      black: { username: headers.Black || 'Black', rating: Number(headers.BlackElo) || 0, result: 'unknown' }
+      white: { username: whiteName, rating: Number(whiteElo) || 0, result: result === '1-0' ? 'win' : (result === '0-1' ? 'lose' : 'draw') },
+      black: { username: blackName, rating: Number(blackElo) || 0, result: result === '0-1' ? 'win' : (result === '1-0' ? 'lose' : 'draw') }
     }
   }
 
