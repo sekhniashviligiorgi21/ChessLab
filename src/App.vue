@@ -1,11 +1,6 @@
 <script setup>
-  import { onMounted } from 'vue'
-  import { inject } from '@vercel/analytics'
+  import { ref } from 'vue' 
   import AuthWidget from './assets/AuthWidget.vue'
-
-  onMounted(() => {
-    inject()
-  })
 </script>
 
 <template>
