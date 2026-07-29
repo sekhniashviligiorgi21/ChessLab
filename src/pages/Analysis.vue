@@ -130,10 +130,25 @@
     currentNode.value.explorerOutOfBook[db] = true
   }
 
+  function getLastOpening(node) {
+    let n = node
+    while (n) {
+      if (n.lastOpening) return n.lastOpening
+      n = n.parent
+    }
+    return null
+  }
+
   async function importLichessExplorer() {
     if (isExplorerOutOfBook(currentNode.value, explorerDb.value)) {
-      opening.value = "Out of book"
-      openingEco.value = ""
+      const last = getLastOpening(currentNode.value)
+      if (last) {
+        opening.value = last.name
+        openingEco.value = last.eco
+      } else {
+        opening.value = movesListUCI.value.length === 0 ? "Starting position" : "Out of book"
+        openingEco.value = ""
+      }
       explorerStats.value = null
       explorerMoves.value = []
       explorerError.value = ""
@@ -147,7 +162,14 @@
 
     if (uciList.length > 40) {
       markNodeOutOfBook(explorerDb.value)
-      opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
+      const last = getLastOpening(currentNode.value)
+      if (last) {
+        opening.value = last.name
+        openingEco.value = last.eco
+      } else {
+        opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
+        openingEco.value = ""
+      }
       explorerLoading.value = false
       return
     }
@@ -160,29 +182,52 @@
 
     try {
       const response = await fetch(url)
+
       if (response.status === 204) {
         markNodeOutOfBook(explorerDb.value)
-        opening.value = `No ${explorerDb.value === 'masters' ? 'master' : 'player'} games at this position`
-        openingEco.value = ""
+        const last = getLastOpening(currentNode.value)
+        if (last) {
+          opening.value = last.name
+          openingEco.value = last.eco
+        } else {
+          opening.value = `No ${explorerDb.value === 'masters' ? 'master' : 'player'} games at this position`
+          openingEco.value = ""
+        }
         explorerStats.value = null
         explorerMoves.value = []
         explorerError.value = ""
         return
       }
+
       if (!response.ok) {
         explorerError.value = `Explorer error (${response.status})`
         explorerStats.value = null
         explorerMoves.value = []
         return
       }
+
       const data = await response.json()
+
       if (data.opening) {
         opening.value = data.opening.name
         openingEco.value = data.opening.eco
+        // Persist the opening on this node so descendants that go out of book can recall it
+        currentNode.value.lastOpening = {
+          name: data.opening.name,
+          eco: data.opening.eco
+        }
       } else {
-        opening.value = uciList.length === 0 ? "Starting position" : "Out of book"
-        openingEco.value = ""
+        // No opening classified for this position - fall back to the most recent known opening
+        const last = getLastOpening(currentNode.value.parent)
+        if (last) {
+          opening.value = last.name
+          openingEco.value = last.eco
+        } else {
+          opening.value = uciList.length === 0 ? "Starting position" : "Out of book"
+          openingEco.value = ""
+        }
       }
+
       const total = (data.white ?? 0) + (data.draws ?? 0) + (data.black ?? 0)
 
       if (total === 0 && uciList.length > 0) {
@@ -195,6 +240,7 @@
         black: Math.round((data.black / total) * 100),
         total
       } : null
+
       explorerMoves.value = (data.moves ?? [])
         .map(m => {
           const moveTotal = (m.white ?? 0) + (m.draws ?? 0) + (m.black ?? 0)
@@ -207,6 +253,7 @@
           }
         })
         .sort((a, b) => b.total - a.total)
+
       explorerError.value = ""
     } catch (error) {
       console.warn("Explorer fetch failed:", error)
@@ -217,7 +264,6 @@
       explorerLoading.value = false
     }
   }
-
   function playExplorerMove(uci) {
     const result = applyUciMove(uci)
     if (!result) return
