@@ -247,19 +247,33 @@ function pieceAttacksSquare(board, fromRank, fromFile, toRank, toFile, piece) {
     return false
 }
 
-function findAttackerValues(board, targetRank, targetFile, attackerColor, excludeSquare = null) {
-    const values = []
+function findAttackers(board, targetRank, targetFile, attackerColor, excludeSquare = null) {
+    const attackers = []
     for (let r = 0; r < 8; r++) {
         for (let f = 0; f < 8; f++) {
             if (excludeSquare && r === excludeSquare.rankIndex && f === excludeSquare.file) continue
             const piece = board[r][f]
             if (!piece || piece.color !== attackerColor || !ATTACKER_VALUES[piece.type]) continue
             if (pieceAttacksSquare(board, r, f, targetRank, targetFile, piece)) {
-                values.push(ATTACKER_VALUES[piece.type])
+                attackers.push({ value: ATTACKER_VALUES[piece.type], type: piece.type })
             }
         }
     }
-    return values
+    return attackers
+}
+
+// Resolves a forced-capture sequence the way a rational player actually plays
+// it: at each step, the side to move only recaptures if doing so doesn't cost
+// them material overall — otherwise they decline and the exchange stops.
+// This is standard SEE (Static Exchange Evaluation) minimax resolution.
+function resolveExchange(targetValue, attackerValues, defenderValues) {
+    if (attackerValues.length === 0) return 0
+    const [attackerValue, ...restAttackers] = attackerValues
+    let value = targetValue
+    if (defenderValues.length > 0) {
+        value -= resolveExchange(attackerValue, defenderValues, restAttackers)
+    }
+    return Math.max(0, value)
 }
 
 function isSacrifice(beforeFen, afterFen, move) {
@@ -268,7 +282,7 @@ function isSacrifice(beforeFen, afterFen, move) {
     const board = parseFenBoard(afterFen)
     const { rankIndex, file } = squareToIndices(move.slice(2, 4))
     const piece = board[rankIndex][file]
-    
+
     if (!piece || !PIECE_VALUES[piece.type] || piece.type === 'p') return false
 
     let capturedValue = 0
@@ -281,44 +295,30 @@ function isSacrifice(beforeFen, afterFen, move) {
     }
 
     const opponentColor = piece.color === 'w' ? 'b' : 'w'
-    let attackerValues = findAttackerValues(board, rankIndex, file, opponentColor)
-    if (attackerValues.length === 0) return false
+    let attackers = findAttackers(board, rankIndex, file, opponentColor)
+    if (attackers.length === 0) return false
 
-    const defenderValues = findAttackerValues(board, rankIndex, file, piece.color, { rankIndex, file })
+    const defenders = findAttackers(board, rankIndex, file, piece.color, { rankIndex, file })
 
-    if (defenderValues.length > 0) {
-        attackerValues = attackerValues.filter(v => v !== 2)
+    // A king can never legally recapture into a square our remaining piece
+    // still defends (it would be moving into check). Filter by piece type
+    // rather than by ATTACKER_VALUES' placeholder king value, so this can't
+    // silently break if that value table is ever retuned.
+    if (defenders.length > 0) {
+        attackers = attackers.filter(a => a.type !== 'k')
+        if (attackers.length === 0) return false
     }
 
-    if (attackerValues.length === 0) return false
+    attackers.sort((a, b) => a.value - b.value)
+    defenders.sort((a, b) => a.value - b.value)
 
-    attackerValues.sort((a, b) => a - b)
-    defenderValues.sort((a, b) => a - b)
+    const opponentBestResponse = resolveExchange(
+        PIECE_VALUES[piece.type],
+        attackers.map(a => a.value),
+        defenders.map(d => d.value)
+    )
 
-    let opponentGained = 0
-    let weGained = capturedValue
-    let turn = 'attacker'
-    let attackerIdx = 0
-    let defenderIdx = 0
-    let currentPieceValue = PIECE_VALUES[piece.type]
-
-    while (true) {
-        if (turn === 'attacker') {
-            if (attackerIdx >= attackerValues.length) break
-            opponentGained += currentPieceValue
-            currentPieceValue = attackerValues[attackerIdx]
-            attackerIdx++
-            turn = 'defender'
-        } else {
-            if (defenderIdx >= defenderValues.length) break
-            weGained += currentPieceValue
-            currentPieceValue = defenderValues[defenderIdx]
-            defenderIdx++
-            turn = 'attacker'
-        }
-    }
-
-    return opponentGained - weGained > 0
+    return (capturedValue - opponentBestResponse) < 0
 }
 
 function analyzePosition(moves, depth, onUpdate = null, multiPV = 3, rootFen = null) {
@@ -455,6 +455,7 @@ function checkBrilliant({
     side_to_move,
     movesList,
     is_sacrifice,
+    uniquenessGap,
 }) {
     const moverIsWhite = side_to_move === 'w'
 
@@ -464,14 +465,7 @@ function checkBrilliant({
     if (!top_moves || top_moves.length < 2) return false
     if (!top_moves[0]?.score || !top_moves[1]?.score) return false
 
-    const bestCp    = scoreToCpComparable(top_moves[0].score)
-    const secondCp  = scoreToCpComparable(top_moves[1].score)
-    const uniquenessGap = moverIsWhite
-        ? (bestCp - secondCp)
-        : (secondCp - bestCp)
     if (uniquenessGap < 180) return false
-
-    if (eval_before?.type === 'mate') return false
 
     if (eval_before?.type !== 'cp') return false
     if (Math.abs(eval_before.value) >= 500) return false
@@ -515,10 +509,6 @@ export async function getEvaluation(move, movesList, depth, onUpdate = null, bef
     const eval_before = before.evaluation
     const top_moves = before.topMoves || []
     const best_move = top_moves[0]?.Move ?? ""
-    
-    const second_best_cp = top_moves.length >= 2
-        ? scoreToCpComparable(top_moves[1]?.score)
-        : scoreToCpComparable(top_moves[0]?.score)
 
     const afterMoves = move ? [...movesList, move] : movesList
 
@@ -531,16 +521,12 @@ export async function getEvaluation(move, movesList, depth, onUpdate = null, bef
         const best_line = topMovesAfter[0]?.line ?? []
         const excellent_line = topMovesAfter[1]?.line ?? []
         const third_line = topMovesAfter[2]?.line ?? []
-        let loss = 0, brilliant_loss = 0
+        let loss = 0
 
         if (eval_before?.type === "cp" && eval_after?.type === "cp") {
-            if (side_to_move === "w") {
-                loss = eval_before.value - eval_after.value
-                brilliant_loss = eval_after.value - second_best_cp
-            } else {
-                loss = eval_after.value - eval_before.value
-                brilliant_loss = second_best_cp - eval_after.value
-            }
+            loss = side_to_move === "w"
+                ? eval_before.value - eval_after.value
+                : eval_after.value - eval_before.value
             loss = Math.max(0, loss)
         }
 
@@ -570,6 +556,7 @@ export async function getEvaluation(move, movesList, depth, onUpdate = null, bef
                     side_to_move,
                     movesList,
                     is_sacrifice,
+                    uniquenessGap,
                 })
 
                 if (isBrilliant) {
@@ -688,7 +675,7 @@ export async function getEvaluation(move, movesList, depth, onUpdate = null, bef
         multiPV,
         rootFen
     )
-    
+
     if (!afterFinal) return null
 
     return buildResult(afterFinal.evaluation, afterFinal.topMoves, depth)
