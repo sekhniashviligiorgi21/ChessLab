@@ -17,9 +17,6 @@
     localStorage.setItem('chesslab_theme', newTheme)
   }, { immediate: true })
 
-  const activeColor = ref('var(--btn-active)')
-  const passiveColor = ref('var(--btn-idle)')
-
   let boardReady = false
   let engineReady = false
 
@@ -29,9 +26,6 @@
     window.addEventListener('scroll', closeContextMenu, true)
 
     activeTab.value = 'moves'
-    movesTitle.value.style.backgroundColor = activeColor.value
-    reportTitle.value.style.backgroundColor = passiveColor.value
-    explorerTitle.value.style.backgroundColor = passiveColor.value
 
     await startEngine()
     engineReady = true
@@ -99,7 +93,6 @@
   const bestArrowSquares = ref(null)
   const toastMessage = ref('')
   const activeTab = ref('moves')
-  const explorerTitle = ref(null)
   const contextMenu = ref({ visible: false, x: 0, y: 0, nodeId: null })
 
   const whiteName = ref('White')
@@ -123,26 +116,52 @@
   const explorerError = ref("")
   const explorerDb = ref('masters')
 
+  function isExplorerOutOfBook(node, db) {
+    let n = node
+    while (n) {
+      if (n.explorerOutOfBook && n.explorerOutOfBook[db]) return true
+      n = n.parent
+    }
+    return false
+  }
+
+  function markNodeOutOfBook(db) {
+    if (!currentNode.value.explorerOutOfBook) currentNode.value.explorerOutOfBook = {}
+    currentNode.value.explorerOutOfBook[db] = true
+  }
+
   async function importLichessExplorer() {
+    if (isExplorerOutOfBook(currentNode.value, explorerDb.value)) {
+      opening.value = "Out of book"
+      openingEco.value = ""
+      explorerStats.value = null
+      explorerMoves.value = []
+      explorerError.value = ""
+      explorerLoading.value = false
+      return
+    }
+
     explorerLoading.value = true
     explorerError.value = ""
     const uciList = movesListUCI.value
-    
+
     if (uciList.length > 40) {
+      markNodeOutOfBook(explorerDb.value)
       opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
-      explorerLoading.value = false // <--- ADD THIS LINE
+      explorerLoading.value = false
       return
     }
-    
+
     const bookList = uciList.join(",")
     const dbParam = explorerDb.value
     const url = bookList
       ? `../../api/explorer?db=${dbParam}&play=${encodeURIComponent(bookList)}`
       : `../../api/explorer?db=${dbParam}`
-      
+
     try {
       const response = await fetch(url)
       if (response.status === 204) {
+        markNodeOutOfBook(explorerDb.value)
         opening.value = `No ${explorerDb.value === 'masters' ? 'master' : 'player'} games at this position`
         openingEco.value = ""
         explorerStats.value = null
@@ -165,6 +184,11 @@
         openingEco.value = ""
       }
       const total = (data.white ?? 0) + (data.draws ?? 0) + (data.black ?? 0)
+
+      if (total === 0 && uciList.length > 0) {
+        markNodeOutOfBook(explorerDb.value)
+      }
+
       explorerStats.value = total > 0 ? {
         white: Math.round((data.white / total) * 100),
         draws: Math.round((data.draws / total) * 100),
@@ -190,9 +214,8 @@
       explorerStats.value = null
       explorerMoves.value = []
     } finally {
-      // <--- ADD THIS FINALLY BLOCK
       explorerLoading.value = false
-    } 
+    }
   }
 
   function playExplorerMove(uci) {
@@ -289,28 +312,6 @@
     walk(moveTree, 1)
     return rows
   })
-
-  const movesTitle = ref(null)
-  const reportTitle = ref(null)
-
-  function changeActiveToMoves() {
-    activeTab.value = 'moves'
-    if (movesTitle.value) movesTitle.value.style.backgroundColor = activeColor.value
-    if (reportTitle.value) reportTitle.value.style.backgroundColor = passiveColor.value
-    if (explorerTitle.value) explorerTitle.value.style.backgroundColor = passiveColor.value
-  }
-  function changeActiveToReport() {
-    activeTab.value = 'report'
-    if (reportTitle.value) reportTitle.value.style.backgroundColor = activeColor.value
-    if (movesTitle.value) movesTitle.value.style.backgroundColor = passiveColor.value
-    if (explorerTitle.value) explorerTitle.value.style.backgroundColor = passiveColor.value
-  }
-  function changeActiveToExplorer() {
-    activeTab.value = 'explorer'
-    if (explorerTitle.value) explorerTitle.value.style.backgroundColor = activeColor.value
-    if (movesTitle.value) movesTitle.value.style.backgroundColor = passiveColor.value
-    if (reportTitle.value) reportTitle.value.style.backgroundColor = passiveColor.value
-  }
 
   function deleteMove(nodeId) {
     const node = nodeMap[nodeId]
@@ -794,7 +795,7 @@
         goToStart()
         treeVersion.value++
         await saveGameInsights()
-        changeActiveToReport()
+        activeTab.value = 'report'
       }
     } finally {
       isImporting.value = false
@@ -1030,7 +1031,6 @@
       piecePly++
     }
 
-    // ---- v2 playstyle telemetry ----
     const toCp = (ev) => {
       if (!ev) return null
       if (ev.type === 'mate') return Math.sign(ev.value) * 10000
@@ -1133,7 +1133,6 @@
     }
     const pgnHash = generatePgnHash(pgn)
 
-    // ---- Puzzle extraction (with difficulty + multi-move data) ----
     const extractedPuzzles = []
     let pNode = moveTree.children[0]
     let pPly = 1
@@ -1160,11 +1159,8 @@
                 playedMoveAccuracy: pNode.accuracy,
                 turn: side,
                 eval: { type: afterEval.type, value: afterEval.value },
-                // NEW: difficulty = how much was thrown away (centipawns)
                 swing: Math.abs(beforeCp - afterCp),
-                // NEW: multi-move continuation (engine principal variation from the puzzle position)
                 continuation: Array.isArray(pNode.analysisData.best_line) ? pNode.analysisData.best_line.slice(0, 5) : [],
-                // NEW: mate theme (best achievable eval from the puzzle position is a forced mate)
                 mateIn: beforeEval.type === 'mate' ? Math.abs(beforeEval.value) : null
               })
             }
@@ -1175,7 +1171,6 @@
       pPly++
     }
 
-    // ---- Player objects (fixes the string-vs-object W/L/D bug) ----
     const whitePlayer = { username: whiteName.value || 'White', rating: whiteRating.value || 0, result: resultForColor('white') }
     const blackPlayer = { username: blackName.value || 'Black', rating: blackRating.value || 0, result: resultForColor('black') }
 
@@ -1203,7 +1198,6 @@
       const existingPuzzles = gameDocData.puzzles || []
       const mergedPuzzles = extractedPuzzles.map(newP => {
         const oldP = existingPuzzles.find(p => p.fen === newP.fen && p.bestMove === newP.bestMove)
-        // preserve spaced-repetition scheduling fields if present
         return oldP ? {
           ...newP,
           solved: oldP.solved || false,
@@ -1359,10 +1353,10 @@
         </div>
       </div>
       <div class="moves">
-        <div class="movesButtons">
-          <button class="movehistory" @click="changeActiveToMoves()" ref="movesTitle">Moves</button>
-          <button class="movehistory" @click="changeActiveToReport()" ref="reportTitle">Report</button>
-          <button class="movehistory" @click="changeActiveToExplorer()" ref="explorerTitle">Explorer</button>
+        <div class="tabs-toggle">
+          <button :class="{ active: activeTab === 'moves' }" @click="activeTab = 'moves'">Moves</button>
+          <button :class="{ active: activeTab === 'report' }" @click="activeTab = 'report'">Report</button>
+          <button :class="{ active: activeTab === 'explorer' }" @click="activeTab = 'explorer'">Explorer</button>
         </div>
         <div class="moveslist" v-if="activeTab === 'moves'" ref="movesListRef">
           <template v-for="row in renderedMoves" :key="row.key">
@@ -1683,13 +1677,6 @@
     scroll-behavior: smooth;
   }
 
-  .movesButtons {
-    display: flex;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 0 0.5rem;
-  }
-
   .move-row {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1984,27 +1971,44 @@
     opacity: 0;
   }
 
-  .movehistory {
-    font-family: serif;
-    flex: 1 1 0;
-    min-width: 0;
-    text-align: center;
-    color: #f5f5dc;
-    font-weight: 700;
-    text-transform: uppercase;
-    margin: 12px 0;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
-    letter-spacing: 1px;
-    padding: 0.5rem 0.4rem;
-    border-radius: 5px;
-    background-color: var(--btn-idle);
+  .tabs-toggle {
+    display: flex;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 4px;
+    border-radius: 10px;
+    margin: 12px 0.5rem 0;
+  }
+
+  .tabs-toggle button {
+    flex: 1;
+    background: transparent;
     border: none;
+    color: rgba(245, 245, 220, 0.6);
+    padding: 0.55rem 0.4rem;
+    border-radius: 7px;
+    cursor: pointer;
+    font-weight: 700;
+    font-family: serif;
     font-size: clamp(0.7rem, 2vw, 0.95rem);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    cursor: pointer;
-    transition: background-color 0.15s ease;
+    transition: all 0.2s ease;
+  }
+
+  .tabs-toggle button:hover:not(.active) {
+    color: rgba(245, 245, 220, 0.85);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .tabs-toggle button.active {
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    color: #f4f0e3;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   }
 
   .boardtools {
