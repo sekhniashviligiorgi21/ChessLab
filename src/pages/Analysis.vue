@@ -559,7 +559,7 @@
     await cancelAnalysis()
     const cached = currentNode.value.analysisData
     const requiresMultiPV3 = !isImporting.value
-    const hasRequiredMultiPV = !requiresMultiPV3 || !currentNode.value.san || (cached?.topMoves?.length >= 3)
+    const hasRequiredMultiPV = !requiresMultiPV3 || (cached?.topMoves?.length >= 3)
 
     if (cached && cached.depth >= targetDepth.value && hasRequiredMultiPV) {
       moveData.value = cached
@@ -838,14 +838,15 @@
         boardAPI.value.setPosition(chess.fen())
       }
       if (!importCancelled) {
-        goToStart()
         treeVersion.value++
         await saveGameInsights()
         activeTab.value = 'report'
       }
     } finally {
       isImporting.value = false
-      getAccuracy()
+      if (!importCancelled) {
+        goToStart()
+      }
     }
   }
   async function tryLoadImportedGame() {
