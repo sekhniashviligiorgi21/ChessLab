@@ -1,1248 +1,2669 @@
 <script setup>
-  import { ref, computed, watch, onMounted } from 'vue'
-  import Title from '../assets/Title.vue'
+  import { ref, shallowRef, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
   import { Chess } from 'chess.js'
-  import { useRouter } from 'vue-router'
+  import { TheChessboard } from 'vue3-chessboard'
   import { auth, db } from '../firebase'
   import { onAuthStateChanged } from 'firebase/auth'
-  import { 
-    collection, addDoc, query, where, getDocs, serverTimestamp,
-    deleteDoc, doc, orderBy
-  } from 'firebase/firestore'
+  import { collection, addDoc, serverTimestamp, query, where, getDocs, updateDoc, doc } from 'firebase/firestore'
+  import 'vue3-chessboard/style.css'
+  import Title from "../assets/Title.vue"
+  import SettingsPanel from "../assets/SettingsPanel.vue"
+  import { startEngine, getEvaluation, cancelAnalysis } from "../engine/engine.js"
+  import { useRoute, useRouter } from 'vue-router'
 
-  const router = useRouter()
-  const USERNAME_STORAGE_KEY = 'chesslab_username'
-  const username = ref(localStorage.getItem(USERNAME_STORAGE_KEY) || '')
-
-  // --- Apply theme instantly on script load to prevent refresh flashing ---
   const currentTheme = ref(localStorage.getItem('chesslab_theme') || 'brown')
   watch(currentTheme, (newTheme) => {
     document.documentElement.setAttribute('data-theme', newTheme)
     localStorage.setItem('chesslab_theme', newTheme)
   }, { immediate: true })
 
-  watch(username, (val) => localStorage.setItem(USERNAME_STORAGE_KEY, val))
+  let boardReady = false
+  let engineReady = false
 
-  const year = ref('')
-  const month = ref('month')
-  const games = ref([])
-  const selectedGame = ref(null)
-  const loading = ref(false)
-  const error = ref(null)
-  const info = ref(null) // non-error notes (e.g. Chess.com archive lag)
-  const gameUci = ref([])
-  const reviewMoves = ref([])
-  const reviewIndex = ref(0)
-  const moveslist = ref([])
+  onMounted(async () => {
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('click', closeContextMenu)
+    window.addEventListener('scroll', closeContextMenu, true)
+
+    activeTab.value = 'moves'
+
+    await startEngine()
+    engineReady = true
+
+    if (route.query.fen) {
+      await loadFen(route.query.fen)
+      await getAccuracy()
+    } else if (route.query.moves) {
+      await tryLoadImportedGame()
+    } else {
+      await getAccuracy()
+    }
+  })
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('keydown', handleKeyDown)
+    window.removeEventListener('click', closeContextMenu)
+    window.removeEventListener('scroll', closeContextMenu, true)
+    clearTimeout(toastTimeout)
+    clearTimeout(longPressTimer)
+  })
+
+  const route = useRoute()
+  const router = useRouter()
+  const isSettingsOpen = ref(false)
+  const isFlipped = computed(() => (rotate.value / 180) % 2 === 1)
+
   const chess = new Chess()
-  const importSite = ref('chess.com')
-  const importMode = ref('last')
+  const greedyChess = new Chess()
+  const excellentChess = new Chess()
+  const bestChess = new Chess()
+  const thirdChess = new Chess()
 
-  const currentUser = ref(null)
-  const savedGames = ref([])
-  const saveStatus = ref('')
+  const DEPTH_STORAGE_KEY = 'chesslab_targetDepth'
+  function loadStoredDepth() {
+    const stored = Number(localStorage.getItem(DEPTH_STORAGE_KEY))
+    return stored >= 10 && stored <= 30 ? stored : 10
+  }
 
-  // --- Browsing / filtering state (shared by fetched games + library) ---
-  const tcFilter = ref('all')
-  const opponentSearch = ref('')
-  watch(importSite, () => {
-    tcFilter.value = 'all'
-    opponentSearch.value = ''
+  const moveData = shallowRef(null)
+  const boardAPI = shallowRef(null)
+  const isAnalyzing = ref(false)
+  const isImporting = ref(false)
+  const importProgress = ref({ current: 0, total: 0 })
+  let importCancelled = false
+  const currentDepth = ref(10)
+  const targetDepth = ref(loadStoredDepth())
+  const height = ref(47.75)
+  const cp = ref(0)
+  const rotate = ref(0)
+  const isAccuracy = ref("")
+  const color = ref("")
+  const sanLine = ref([])
+  const bestMoveSan = ref('')
+  const excellentSanLine = ref([])
+  const treeVersion = ref(0)
+  const movesListUCI = ref([])
+  const lastMoveSquare = ref(null)
+  const lastMoveAccuracy = ref(null)
+  const boardRef = ref(null)
+  const movesListRef = ref(null)
+  const thirdSanLine = ref([])
+  const soundOn = ref(true)
+  const showBestArrow = ref(true)
+  const bestArrowSquares = ref(null)
+  const toastMessage = ref('')
+  const activeTab = ref('moves')
+  const contextMenu = ref({ visible: false, x: 0, y: 0, nodeId: null })
+
+  const whiteName = ref('White')
+  const blackName = ref('Black')
+  const whiteRating = ref(null)
+  const blackRating = ref(null)
+  const hasPlayerInfo = ref(false)
+
+  const gameResult = ref(null)
+  if (route.query.pgn) {
+    const match = route.query.pgn.match(/\[Result\s+"([^"]+)"\]/)
+    if (match) gameResult.value = match[1]
+  }
+
+  const opening = ref("")
+  const openingEco = ref("")
+
+  const explorerStats = shallowRef(null)
+  const explorerMoves = shallowRef([])
+  const explorerLoading = ref(false)
+  const explorerError = ref("")
+  const explorerDb = ref('masters')
+
+  function isExplorerOutOfBook(node, db) {
+    let n = node
+    while (n) {
+      if (n.explorerOutOfBook && n.explorerOutOfBook[db]) return true
+      n = n.parent
+    }
+    return false
+  }
+
+  function markNodeOutOfBook(db) {
+    if (!currentNode.value.explorerOutOfBook) currentNode.value.explorerOutOfBook = {}
+    currentNode.value.explorerOutOfBook[db] = true
+  }
+
+  function getLastOpening(node) {
+    let n = node
+    while (n) {
+      if (n.lastOpening) return n.lastOpening
+      n = n.parent
+    }
+    return null
+  }
+
+  async function importLichessExplorer() {
+    if (isExplorerOutOfBook(currentNode.value, explorerDb.value)) {
+      const last = getLastOpening(currentNode.value)
+      if (last) {
+        opening.value = last.name
+        openingEco.value = last.eco
+      } else {
+        opening.value = movesListUCI.value.length === 0 ? "Starting position" : "Out of book"
+        openingEco.value = ""
+      }
+      explorerStats.value = null
+      explorerMoves.value = []
+      explorerError.value = ""
+      explorerLoading.value = false
+      return
+    }
+
+    explorerLoading.value = true
+    explorerError.value = ""
+    const uciList = movesListUCI.value
+
+    if (uciList.length > 40) {
+      markNodeOutOfBook(explorerDb.value)
+      const last = getLastOpening(currentNode.value)
+      if (last) {
+        opening.value = last.name
+        openingEco.value = last.eco
+      } else {
+        opening.value = `${explorerDb.value === 'masters' ? 'Master' : 'Player'} games limit reached (max 40 moves)`
+        openingEco.value = ""
+      }
+      explorerLoading.value = false
+      return
+    }
+
+    const bookList = uciList.join(",")
+    const dbParam = explorerDb.value
+    const url = bookList
+      ? `../../api/explorer?db=${dbParam}&play=${encodeURIComponent(bookList)}`
+      : `../../api/explorer?db=${dbParam}`
+
+    try {
+      const response = await fetch(url)
+
+      if (response.status === 204) {
+        markNodeOutOfBook(explorerDb.value)
+        const last = getLastOpening(currentNode.value)
+        if (last) {
+          opening.value = last.name
+          openingEco.value = last.eco
+        } else {
+          opening.value = `No ${explorerDb.value === 'masters' ? 'master' : 'player'} games at this position`
+          openingEco.value = ""
+        }
+        explorerStats.value = null
+        explorerMoves.value = []
+        explorerError.value = ""
+        return
+      }
+
+      if (!response.ok) {
+        explorerError.value = `Explorer error (${response.status})`
+        explorerStats.value = null
+        explorerMoves.value = []
+        return
+      }
+
+      const data = await response.json()
+
+      if (data.opening) {
+        opening.value = data.opening.name
+        openingEco.value = data.opening.eco
+        // Persist the opening on this node so descendants that go out of book can recall it
+        currentNode.value.lastOpening = {
+          name: data.opening.name,
+          eco: data.opening.eco
+        }
+      } else {
+        // No opening classified for this position - fall back to the most recent known opening
+        const last = getLastOpening(currentNode.value.parent)
+        if (last) {
+          opening.value = last.name
+          openingEco.value = last.eco
+        } else {
+          opening.value = uciList.length === 0 ? "Starting position" : "Out of book"
+          openingEco.value = ""
+        }
+      }
+
+      const total = (data.white ?? 0) + (data.draws ?? 0) + (data.black ?? 0)
+
+      if (total === 0 && uciList.length > 0) {
+        markNodeOutOfBook(explorerDb.value)
+      }
+
+      explorerStats.value = total > 0 ? {
+        white: Math.round((data.white / total) * 100),
+        draws: Math.round((data.draws / total) * 100),
+        black: Math.round((data.black / total) * 100),
+        total
+      } : null
+
+      explorerMoves.value = (data.moves ?? [])
+        .map(m => {
+          const moveTotal = (m.white ?? 0) + (m.draws ?? 0) + (m.black ?? 0)
+          return {
+            san: m.san, uci: m.uci, total: moveTotal,
+            percent: total > 0 ? Math.round((moveTotal / total) * 100) : 0,
+            white: moveTotal > 0 ? Math.round((m.white / moveTotal) * 100) : 0,
+            draws: moveTotal > 0 ? Math.round((m.draws / moveTotal) * 100) : 0,
+            black: moveTotal > 0 ? Math.round((m.black / moveTotal) * 100) : 0,
+          }
+        })
+        .sort((a, b) => b.total - a.total)
+
+      explorerError.value = ""
+    } catch (error) {
+      console.warn("Explorer fetch failed:", error)
+      explorerError.value = "No connection to explorer"
+      explorerStats.value = null
+      explorerMoves.value = []
+    } finally {
+      explorerLoading.value = false
+    }
+  }
+  function playExplorerMove(uci) {
+    const result = applyUciMove(uci)
+    if (!result) return
+    soundForLastMove(result)
+    boardAPI.value.setPosition(chess.fen())
+    getAccuracy()
+  }
+
+  if (route.query.white || route.query.black) {
+    hasPlayerInfo.value = true
+    if (route.query.white) whiteName.value = route.query.white
+    if (route.query.black) blackName.value = route.query.black
+    if (route.query.whiteRating) whiteRating.value = route.query.whiteRating
+    if (route.query.blackRating) blackRating.value = route.query.blackRating
+  }
+
+  const isWhiteWinner = computed(() => gameResult.value === '1-0')
+  const isBlackWinner = computed(() => gameResult.value === '0-1')
+
+  const topPlayer = computed(() => {
+    const isWhite = isFlipped.value
+    return {
+      name: isWhite ? whiteName.value : blackName.value,
+      rating: isWhite ? whiteRating.value : blackRating.value,
+      side: isWhite ? 'white' : 'black',
+      isWinner: isWhite ? isWhiteWinner.value : isBlackWinner.value
+    }
   })
 
-  const monthNames = Array.from({ length: 12 }, (_, i) => {
-    return new Date(2000, i, 1).toLocaleString('default', { month: 'long' })
+  const bottomPlayer = computed(() => {
+    const isWhite = !isFlipped.value
+    return {
+      name: isWhite ? whiteName.value : blackName.value,
+      rating: isWhite ? whiteRating.value : blackRating.value,
+      side: isWhite ? 'white' : 'black',
+      isWinner: isWhite ? isWhiteWinner.value : isBlackWinner.value
+    }
   })
-  const yearOptions = Array.from({ length: 11 }, (_, i) => new Date().getFullYear() - i)
+
+  let longPressTimer = null
+  let longPressTriggered = false
+  let toastTimeout = null
+  let audioCtx = null
+  let lastPress = 0
+
+  const moveTree = {
+    id: 0, san: null, uci: null, fen: chess.fen(),
+    accuracy: null, analysisData: null, parent: null, children: []
+  }
+  let nodeIdCounter = 1
+  const nodeMap = { 0: moveTree }
+  const currentNode = shallowRef(moveTree)
+
+  const renderedMoves = computed(() => {
+    treeVersion.value
+    const rows = []
+    function makeCell(node, moveNum, showAsStart, depth) {
+      const isWhite = moveNum % 2 === 1
+      return {
+        key: `cell-${node.id}`, node,
+        displayNum: Math.ceil(moveNum / 2),
+        isWhite, showNum: isWhite || showAsStart, variant: depth > 0
+      }
+    }
+    function walk(startNode, moveNum, depth = 0, isStartOfLine = true) {
+      let current = startNode
+      let ply = moveNum
+      let firstRow = true
+      if (!current.san) {
+        if (current.children.length === 0) return
+        walk(current.children[0], ply, depth, isStartOfLine)
+        for (const variant of current.children.slice(1)) walk(variant, ply, depth + 1, true)
+        return
+      }
+      while (current) {
+        const mainReply = current.children[0] ?? null
+        rows.push({
+          key: `row-${current.id}`, depth,
+          cells: [
+            makeCell(current, ply, firstRow && isStartOfLine, depth),
+            mainReply ? makeCell(mainReply, ply + 1, false, depth) : null
+          ]
+        })
+        for (const variant of current.children.slice(1)) walk(variant, ply + 1, depth + 1, true)
+        if (mainReply) for (const variant of mainReply.children.slice(1)) walk(variant, ply + 2, depth + 1, true)
+        if (!mainReply) break
+        current = mainReply.children[0] ?? null
+        ply += 2
+        firstRow = false
+      }
+    }
+    walk(moveTree, 1)
+    return rows
+  })
+
+  function deleteMove(nodeId) {
+    const node = nodeMap[nodeId]
+    if (!node || node.parent === null) return
+    const parent = node.parent
+    const idx = parent.children.indexOf(node)
+    if (idx !== -1) parent.children.splice(idx, 1)
+    function collectIds(n, ids) { ids.push(n.id); for (const child of n.children) collectIds(child, ids); return ids }
+    const idsToRemove = collectIds(node, [])
+    const currentWasRemoved = idsToRemove.includes(currentNode.value.id)
+    for (const id of idsToRemove) delete nodeMap[id]
+    treeVersion.value++
+    if (currentWasRemoved) jumpToNode(parent.id)
+  }
+
+  function showContextMenu(x, y, nodeId) {
+    const menuWidth = 160, menuHeight = 44
+    contextMenu.value = {
+      visible: true,
+      x: Math.min(x, window.innerWidth - menuWidth - 8),
+      y: Math.min(y, window.innerHeight - menuHeight - 8),
+      nodeId
+    }
+  }
+  function closeContextMenu() { contextMenu.value.visible = false }
+  function openContextMenu(event, nodeId) { showContextMenu(event.clientX, event.clientY, nodeId) }
+  function handleDeleteFromMenu() {
+    if (contextMenu.value.nodeId !== null) deleteMove(contextMenu.value.nodeId)
+    closeContextMenu()
+  }
+  function handleTouchStart(event, nodeId) {
+    longPressTriggered = false
+    longPressTimer = setTimeout(() => {
+      longPressTriggered = true
+      const touch = event.touches[0]
+      showContextMenu(touch.clientX, touch.clientY, nodeId)
+      if (navigator.vibrate) navigator.vibrate(10)
+    }, 500)
+  }
+  function cancelLongPress() { clearTimeout(longPressTimer) }
+  function handleCellClick(nodeId) {
+    if (longPressTriggered) { longPressTriggered = false; return }
+    jumpToNode(nodeId)
+  }
+
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext
+      audioCtx = new Ctx()
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume()
+    return audioCtx
+  }
+  function playSound(type) {
+    if (!soundOn.value) return
+    try {
+      const ctx = ensureAudioCtx()
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain); gain.connect(ctx.destination)
+      const now = ctx.currentTime
+      const presets = {
+        move: { freq: 520, gain: 0.06, dur: 0.09 },
+        capture: { freq: 260, gain: 0.10, dur: 0.14 },
+        check: { freq: 880, gain: 0.10, dur: 0.20 },
+      }
+      const p = presets[type] ?? presets.move
+      osc.type = type === 'capture' ? 'square' : 'sine'
+      osc.frequency.setValueAtTime(p.freq, now)
+      gain.gain.setValueAtTime(p.gain, now)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + p.dur)
+      osc.start(now); osc.stop(now + p.dur + 0.02)
+    } catch (e) {}
+  }
+  function soundForLastMove(sanMove) {
+    if (chess.inCheck()) playSound('check')
+    else if (sanMove?.captured) playSound('capture')
+    else playSound('move')
+  }
+
+  watch(showBestArrow, (val) => {
+    if (!val && boardAPI.value) boardAPI.value.hideMoves()
+    else drawBestArrow()
+  })
+  watch(currentNode, () => { if (activeTab.value === 'explorer') importLichessExplorer() }, { immediate: true })
+  watch(activeTab, (newTab) => { if (newTab === 'explorer') importLichessExplorer() })
+  watch(explorerDb, () => { importLichessExplorer() })
+
+  function showToast(message) {
+    toastMessage.value = message
+    clearTimeout(toastTimeout)
+    toastTimeout = setTimeout(() => { toastMessage.value = '' }, 1800)
+  }
+  async function copyToClipboard(text, label) {
+    try { await navigator.clipboard.writeText(text); showToast(`${label} copied to clipboard`) }
+    catch (e) { showToast(`Couldn't copy ${label.toLowerCase()}`) }
+  }
+  function copyPGN() { copyToClipboard(chess.pgn() || '(no moves yet)', 'PGN') }
+  function copyFEN() { copyToClipboard(chess.fen(), 'FEN') }
+
+  function drawBestArrow() {
+    if (!showBestArrow.value || !boardAPI.value || !bestArrowSquares.value) return
+    const { from, to } = bestArrowSquares.value
+    boardAPI.value.drawMove(from, to, 'green')
+  }
+
+  async function onBoardCreated(api) {
+    boardAPI.value = api
+    chess.reset()
+    boardAPI.value.setPosition(chess.fen())
+    boardReady = true
+    await tryLoadImportedGame()
+  }
+
+  async function handleBothMoves(move) {
+    const uci = move.promotion ? `${move.from}${move.to}${move.promotion}` : `${move.from}${move.to}`
+    let sanMove
+    try { sanMove = chess.move({ from: move.from, to: move.to, promotion: move.promotion ?? undefined }) }
+    catch (e) { sanMove = null }
+    if (!sanMove) { boardAPI.value.setPosition(currentNode.value.fen); return }
+    soundForLastMove(sanMove)
+    const existing = currentNode.value.children.find(c => c.uci === uci)
+    if (existing) { currentNode.value = existing }
+    else {
+      const newNode = {
+        id: nodeIdCounter++, san: sanMove.san, uci, fen: chess.fen(),
+        accuracy: null, analysisData: null, parent: currentNode.value, children: []
+      }
+      nodeMap[newNode.id] = newNode
+      currentNode.value.children.push(newNode)
+      currentNode.value = newNode
+      treeVersion.value++
+    }
+    movesListUCI.value.push(uci)
+    await getAccuracy()
+  }
+
+  function undoMove() {
+    lastMoveSquare.value = null
+    lastMoveAccuracy.value = null
+    if (currentNode.value.parent === null) return
+    chess.undo()
+    currentNode.value = currentNode.value.parent
+    movesListUCI.value.pop()
+    boardAPI.value.setPosition(chess.fen())
+  }
+  function redoMove() {
+    lastMoveSquare.value = null
+    lastMoveAccuracy.value = null
+    if (currentNode.value.children.length === 0) return
+    const nextNode = currentNode.value.children[0]
+    let sanMove
+    try { sanMove = chess.move(nextNode.uci) } catch (e) { sanMove = null }
+    if (sanMove) soundForLastMove(sanMove)
+    movesListUCI.value.push(nextNode.uci)
+    currentNode.value = nextNode
+    boardAPI.value.setPosition(nextNode.fen)
+  }
+  function undoAccuracy() { undoMove(); getAccuracy() }
+  function redoAccuracy() { redoMove(); getAccuracy() }
+
+  function jumpToNode(nodeId) {
+    const node = nodeMap[nodeId]
+    if (!node || node === currentNode.value) return
+    const uciMoves = []
+    let current = node
+    while (current.parent !== null) { uciMoves.unshift(current.uci); current = current.parent }
+    chess.reset()
+    for (const uci of uciMoves) { try { chess.move(uci) } catch (e) { console.warn("Failed to apply UCI in jumpToNode", uci, e) } }
+    movesListUCI.value = uciMoves
+    currentNode.value = node
+    boardAPI.value.setPosition(node.fen)
+    moveData.value = null
+    isAccuracy.value = ""
+    color.value = ""
+    getAccuracy()
+  }
+  function goToStart() { jumpToNode(0) }
+  function goToEnd() {
+    let node = currentNode.value
+    while (node.children.length > 0) node = node.children[0]
+    jumpToNode(node.id)
+  }
+  function resetBoard() {
+    chess.reset()
+    boardAPI.value.setPosition(chess.fen())
+    movesListUCI.value = []
+    currentNode.value = moveTree
+    moveTree.children = []
+    moveTree.fen = chess.fen()
+    nodeIdCounter = 1
+    for (const key in nodeMap) if (parseInt(key) !== 0) delete nodeMap[key]
+    treeVersion.value++
+    getAccuracy()
+  }
+  function resetAccuracy() { resetBoard(); isAccuracy.value = ""; color.value = ""; moveData.value = null }
+
+  async function getAccuracy() {
+    await cancelAnalysis()
+    const cached = currentNode.value.analysisData
+    const requiresMultiPV3 = !isImporting.value
+    const hasRequiredMultiPV = !requiresMultiPV3 || (cached?.topMoves?.length >= 3)
+
+    if (cached && cached.depth >= targetDepth.value && hasRequiredMultiPV) {
+      moveData.value = cached
+      lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
+      lastMoveAccuracy.value = cached.move_accuracy
+      currentDepth.value = cached.depth
+      isAnalyzing.value = false
+      if (showBestArrow.value && boardAPI.value) boardAPI.value.hideMoves()
+      evalSize(); moveDescription(); sanBest(); uciSecondLine(); uciThirdLine(); uciLine(); drawBestArrow()
+      return
+    }
+    if (cached && !hasRequiredMultiPV) {
+      moveData.value = cached
+      lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
+      lastMoveAccuracy.value = cached.move_accuracy
+      currentDepth.value = cached.depth
+      evalSize(); moveDescription(); sanBest(); uciSecondLine(); uciThirdLine(); uciLine(); drawBestArrow()
+    }
+
+    isAnalyzing.value = true
+    bestArrowSquares.value = null
+    if (showBestArrow.value && boardAPI.value) boardAPI.value.hideMoves()
+
+    const beforeFen = currentNode.value.parent ? currentNode.value.parent.fen : moveTree.fen
+    const afterFen = currentNode.value.fen
+
+    await getEvaluation(
+      movesListUCI.value.length === 0 ? '' : movesListUCI.value.at(-1),
+      movesListUCI.value.slice(0, -1),
+      targetDepth.value,
+      (result) => {
+        moveData.value = result
+        lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
+        lastMoveAccuracy.value = result.move_accuracy
+        currentNode.value.accuracy = result.move_accuracy
+        currentNode.value.analysisData = result
+        currentDepth.value = result.depth
+        isAnalyzing.value = false
+        evalSize(); moveDescription(); sanBest(); uciSecondLine(); uciThirdLine(); uciLine(); drawBestArrow()
+        if (!isImporting.value) treeVersion.value++
+      },
+      beforeFen, afterFen, moveTree.fen,
+      isImporting.value ? 1 : 3
+    )
+  }
+
+  function onDepthChange() { localStorage.setItem(DEPTH_STORAGE_KEY, String(targetDepth.value)); getAccuracy() }
+
+  function formatEval(evalObj) {
+    if (chess.isGameOver()) {
+      if (chess.isCheckmate()) return chess.turn() === 'w' ? '0-1' : '1-0'
+      if (chess.isStalemate() || chess.isInsufficientMaterial() || chess.isThreefoldRepetition() || chess.isDraw()) return '1/2-1/2'
+    }
+    if (!evalObj) return ""
+    if (evalObj.type === "cp") return (evalObj.value / 100).toFixed(2)
+    if (evalObj.type === "mate") return `M${evalObj.value}`
+    return ""
+  }
+  function evalSize() {
+    if (!moveData.value || !moveData.value.eval) return
+    const evalValue = moveData.value.eval.value
+    const evalType = moveData.value.eval.type
+    if (evalType === "mate") {
+      if (evalValue >= 0) { cp.value = 800; height.value = 0 } else { cp.value = -800; height.value = 100 }
+      return
+    }
+    cp.value = Math.max(-800, Math.min(800, evalValue))
+    height.value = 50 - (cp.value / 800) * 50
+  }
+  function flipBoard() { boardAPI.value.toggleOrientation(); rotate.value += 180 }
+
+  function accuracySymbol(acc) {
+    const map = {
+      brilliant: 'brilliant', best: 'best', excellent: 'excellent', good: 'good',
+      inaccuracy: 'inaccuracy', mistake: 'mistake', blunder: 'blunder', great: 'great', book: 'book'
+    }
+    return map[acc] ? `/moveClassifications/${map[acc]}.png` : undefined
+  }
+  function moveDescription() {
+    isAccuracy.value = ''
+    if (!currentNode.value.san) return
+    const descriptions = {
+      great: { color: '#4c8cb5', text: ' is a great move!' },
+      brilliant: { color: '#03aea7', text: ' is a brilliant move!!' },
+      book: { color: '#ad8760', text: ' is a book move' },
+      best: { color: '#6ad13f', text: ' is the best move' },
+      excellent: { color: '#90bc36', text: ' is an excellent move' },
+      good: { color: '#8eae83', text: ' is a good move' },
+      inaccuracy: { color: '#f2bc43', text: ' is an inaccuracy' },
+      mistake: { color: '#f38800', text: ' is a mistake' },
+      blunder: { color: '#FF0000', text: ' is a blunder' },
+    }
+    const config = descriptions[moveData.value.move_accuracy]
+    if (!config) return
+    color.value = config.color
+    isAccuracy.value = prettyMove(currentNode.value.san) + config.text
+  }
+  function displayBest() {
+    if (['brilliant', 'best', 'great', 'book'].includes(moveData.value.move_accuracy)) return ""
+    if (moveData.value.best_move === "") return ""
+    return prettyMove(bestMoveSan.value) + " was the best"
+  }
+  function uciLine() {
+    sanLine.value = []
+    bestArrowSquares.value = null
+    if (!moveData.value?.best_line) return
+    let lineNum = 0
+    greedyChess.load(chess.fen())
+    for (let i = 0; i < 30; i++) {
+      const greedyMoveBefore = moveData.value.best_line[lineNum]
+      if (!greedyMoveBefore) break
+      const greedyMove = greedyChess.move(greedyMoveBefore, { sloppy: true })
+      if (!greedyMove) break
+      sanLine.value.push(greedyMove.san)
+      if (lineNum === 0) bestArrowSquares.value = { from: greedyMove.from, to: greedyMove.to }
+      lineNum++
+    }
+  }
+  function sanBest() {
+    if (!moveData.value?.best_move) return
+    const baseFen = currentNode.value.parent ? currentNode.value.parent.fen : moveTree.fen
+    bestChess.load(baseFen)
+    const bestMove = bestChess.move(moveData.value.best_move, { sloppy: true })
+    if (!bestMove) return
+    bestMoveSan.value = bestMove.san
+  }
+  function uciSecondLine() {
+    excellentSanLine.value = []
+    if (!moveData.value?.excellent_line) return
+    let secondLineNum = 0
+    excellentChess.load(chess.fen())
+    for (let i = 0; i < 30; i++) {
+      const m = moveData.value.excellent_line[secondLineNum]
+      if (!m) break
+      const mm = excellentChess.move(m, { sloppy: true })
+      if (!mm) break
+      excellentSanLine.value.push(mm.san)
+      secondLineNum++
+    }
+  }
+  function uciThirdLine() {
+    thirdSanLine.value = []
+    if (!moveData.value?.third_line) return
+    let thirdLineNum = 0
+    thirdChess.load(chess.fen())
+    for (let i = 0; i < 30; i++) {
+      const m = moveData.value.third_line[thirdLineNum]
+      if (!m) break
+      const mm = thirdChess.move(m, { sloppy: true })
+      if (!mm) break
+      thirdSanLine.value.push(mm.san)
+      thirdLineNum++
+    }
+  }
+  function prettyMove(move) {
+    const pieces = { 'K': '♚', 'Q': '♛', 'R': '♜', 'B': '♝', 'N': '♞' }
+    return move ? move.replace(/[KQRBN]/g, p => pieces[p]) : ''
+  }
+  function formatCount(num) {
+    if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1) + 'B'
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M'
+    if (num >= 10_000) return Math.round(num / 1000) + 'K'
+    return num.toLocaleString()
+  }
+  function squareStyle(square) {
+    if (!square) return {}
+    const file = square.charCodeAt(0) - 97
+    const rank = parseInt(square[1]) - 1
+    const flipped = (rotate.value / 180) % 2 === 1
+    const col = flipped ? 7 - file : file
+    const row = flipped ? rank : 7 - rank
+    return { position: 'absolute', left: `${(col + 1) * 12.5}%`, top: `${row * 12.5}%`, transform: 'translate(-70%, -35%)' }
+  }
+
+  async function playMove() {
+    if (!moveData.value?.best_move) return
+    const uci = moveData.value.best_move
+    const from = uci.slice(0, 2), to = uci.slice(2, 4)
+    const promotion = uci.length > 4 ? uci[4] : undefined
+    undoMove()
+    let sanMove
+    try { sanMove = chess.move({ from, to, promotion: promotion ?? undefined }) } catch (e) { sanMove = null }
+    if (!sanMove) return
+    soundForLastMove(sanMove)
+    const existing = currentNode.value.children.find(c => c.uci === uci)
+    if (existing) { currentNode.value = existing }
+    else {
+      const newNode = {
+        id: nodeIdCounter++, san: sanMove.san, uci, fen: chess.fen(),
+        accuracy: null, analysisData: null, parent: currentNode.value, children: []
+      }
+      nodeMap[newNode.id] = newNode
+      currentNode.value.children.push(newNode)
+      currentNode.value = newNode
+    }
+    movesListUCI.value.push(uci)
+    boardAPI.value.setPosition(chess.fen())
+    treeVersion.value++
+    getAccuracy()
+  }
+
+  const handleKeyDown = (event) => {
+    const delay = 200
+    const currentTime = Date.now()
+    if (event.repeat) return
+    if (isImporting.value) return
+    switch (event.key) {
+      case 'ArrowLeft': if (currentTime - lastPress < delay) return; lastPress = currentTime; undoAccuracy(); break
+      case 'ArrowRight': if (currentTime - lastPress < delay) return; lastPress = currentTime; redoAccuracy(); break
+      case 'Home': event.preventDefault(); goToStart(); break
+      case 'End': event.preventDefault(); goToEnd(); break
+    }
+  }
+
+  function applyUciMove(uci) {
+    const from = uci.slice(0, 2)
+    let to = uci.slice(2, 4)
+    const promotion = uci.length > 4 ? uci[4] : undefined
+    const castlingFix = { 'e1h1': 'g1', 'e1a1': 'c1', 'e8h8': 'g8', 'e8a8': 'c8' }
+    if (castlingFix[uci]) to = castlingFix[uci]
+    let sanMove
+    try { sanMove = chess.move({ from, to, promotion: promotion ?? undefined }) }
+    catch (e) { console.warn('Move execution failed for', uci, e); return false }
+    if (!sanMove) return false
+    const normalizedUci = `${from}${to}${promotion ?? ''}`
+    const existing = currentNode.value.children.find(c => c.uci === normalizedUci)
+    if (existing) { currentNode.value = existing }
+    else {
+      const newNode = {
+        id: nodeIdCounter++, san: sanMove.san, uci: normalizedUci, fen: chess.fen(),
+        accuracy: null, analysisData: null, parent: currentNode.value, children: []
+      }
+      nodeMap[newNode.id] = newNode
+      currentNode.value.children.push(newNode)
+      currentNode.value = newNode
+      if (!isImporting.value) treeVersion.value++
+    }
+    movesListUCI.value.push(normalizedUci)
+    return sanMove
+  }
+
+  function playLineMoves(uciList, count) {
+    if (!uciList) return
+    let lastSanMove = null
+    for (let i = 0; i < count; i++) {
+      const uci = uciList[i]
+      if (!uci) break
+      const result = applyUciMove(uci)
+      if (!result) break
+      lastSanMove = result
+    }
+    if (lastSanMove) soundForLastMove(lastSanMove)
+    boardAPI.value.setPosition(chess.fen())
+    treeVersion.value++
+    getAccuracy()
+  }
+
+  async function loadFen(fen) {
+    chess.load(fen)
+    moveTree.fen = fen
+    currentNode.value = moveTree
+    if (boardAPI.value) boardAPI.value.setPosition(fen)
+  }
+
+  async function loadImportedGame(uciList) {
+    isImporting.value = true
+    importCancelled = false
+    importProgress.value = { current: 0, total: uciList.length }
+    try {
+      for (const uci of uciList) {
+        if (importCancelled) break
+        const result = applyUciMove(uci)
+        if (!result) break
+        await getAccuracy()
+        importProgress.value.current++
+        boardAPI.value.setPosition(chess.fen())
+      }
+      if (!importCancelled) {
+        treeVersion.value++
+        await saveGameInsights()
+        activeTab.value = 'report'
+      }
+    } finally {
+      isImporting.value = false
+      if (!importCancelled) {
+        goToStart()
+      }
+    }
+  }
+  async function tryLoadImportedGame() {
+    if (boardReady && engineReady && route.query.moves) {
+      const importedUciList = route.query.moves.split('-')
+      await loadImportedGame(importedUciList)
+    }
+  }
+  async function cancelImport() {
+    importCancelled = true
+    await cancelAnalysis()
+    isImporting.value = false
+    resetAccuracy()
+    hasPlayerInfo.value = false
+    router.replace({ path: '/', query: {} })
+  }
+
+  const classificationOrder = ['brilliant', 'great', 'best', 'excellent', 'good', 'book', 'inaccuracy', 'mistake', 'blunder']
+  const classificationMeta = {
+    brilliant: { label: 'Brilliant', color: '#03aea7' },
+    great: { label: 'Great', color: '#4c8cb5' },
+    best: { label: 'Best', color: '#6ad13f' },
+    excellent: { label: 'Excellent', color: '#90bc36' },
+    good: { label: 'Good', color: '#8eae83' },
+    book: { label: 'Book', color: '#ad8760' },
+    inaccuracy: { label: 'Inaccuracy', color: '#f2bc43' },
+    mistake: { label: 'Mistake', color: '#f38800' },
+    blunder: { label: 'Blunder', color: '#FF0000' }
+  }
+  const accuracyWeights = {
+    brilliant: 100, great: 100, best: 100, book: 100,
+    excellent: 90, good: 80, inaccuracy: 20, mistake: 10, blunder: 0
+  }
+
+  const gameReportStats = computed(() => {
+    treeVersion.value
+    function emptyCounts() { return classificationOrder.reduce((acc, key) => ({ ...acc, [key]: 0 }), {}) }
+    const white = { counts: emptyCounts(), weightedSum: 0, moveCount: 0 }
+    const black = { counts: emptyCounts(), weightedSum: 0, moveCount: 0 }
+    let current = moveTree.children[0] ?? null
+    let ply = 1
+    while (current) {
+      const side = ply % 2 === 1 ? white : black
+      if (current.accuracy && side.counts.hasOwnProperty(current.accuracy)) {
+        side.counts[current.accuracy]++
+        side.weightedSum += accuracyWeights[current.accuracy] ?? 0
+        side.moveCount++
+      }
+      current = current.children[0] ?? null
+      ply++
+    }
+    const finalize = (side) => ({ counts: side.counts, accuracy: side.moveCount > 0 ? (side.weightedSum / side.moveCount) : null })
+    return { white: finalize(white), black: finalize(black) }
+  })
+
+  const estimatedRatings = computed(() => {
+    const estimate = (accuracy) => {
+      if (accuracy === null) return null
+      if (accuracy >= 90) return Math.round(2000 + (accuracy - 90) * 50)
+      if (accuracy >= 70) return Math.round(1600 + (accuracy - 70) * 20)
+      return Math.round(900 + accuracy * 10)
+    }
+    return {
+      white: estimate(gameReportStats.value.white.accuracy),
+      black: estimate(gameReportStats.value.black.accuracy)
+    }
+  })
+
+  const importProgressPercent = computed(() => {
+    if (!importProgress.value.total) return 0
+    return Math.round((importProgress.value.current / importProgress.value.total) * 100)
+  })
+
+  const currentUserId = ref(null)
+  let pendingGameMeta = null
 
   onMounted(() => {
-    onAuthStateChanged(auth, (user) => {
-      currentUser.value = user
-      if (user) fetchSavedGames()
-      else savedGames.value = []
-    })
+    onAuthStateChanged(auth, (user) => { if (user) currentUserId.value = user.uid })
   })
 
-  // --- Time control normalization (Chess.com + Lichess use different names) ---
-  const TC_ORDER = ['ultrabullet', 'bullet', 'blitz', 'rapid', 'classical', 'correspondence', 'daily', 'unknown']
-  const TC_LABELS = {
-    ultrabullet: 'UltraBullet',
-    bullet: 'Bullet',
-    blitz: 'Blitz',
-    rapid: 'Rapid',
-    classical: 'Classical',
-    correspondence: 'Correspondence',
-    daily: 'Daily',
-    unknown: 'Other'
-  }
-  const tcKey = (g) => (g?.time_class || 'unknown').toLowerCase()
-
-  // The list currently being browsed (library tab vs fetched results)
-  const activeSource = computed(() => importSite.value === 'library' ? savedGames.value : games.value)
-
-  const tcCounts = computed(() => {
-    const counts = new Map()
-    for (const g of activeSource.value) {
-      counts.set(tcKey(g), (counts.get(tcKey(g)) || 0) + 1)
+  watch(() => route.query, (newQuery) => {
+    if (newQuery.white || newQuery.black) {
+      pendingGameMeta = {
+        white: newQuery.white || 'White',
+        black: newQuery.black || 'Black',
+        pgn: newQuery.pgn || null,
+        myColor: newQuery.myColor || null
+      }
+    } else {
+      pendingGameMeta = null
     }
-    return counts
-  })
+  }, { immediate: true })
 
-  const timeControlTabs = computed(() => {
-    const tabs = [{ value: 'all', label: 'All', count: activeSource.value.length }]
-    for (const tc of TC_ORDER) {
-      if (tcCounts.value.has(tc)) {
-        tabs.push({ value: tc, label: TC_LABELS[tc] || tc, count: tcCounts.value.get(tc) })
+  function calculateMaterialBalance(fen) {
+    const parts = fen.split(' ')
+    const board = parts[0]
+    const values = { p: 1, n: 3, b: 3, r: 5, q: 9 }
+    let whiteMat = 0, blackMat = 0
+    for (const char of board) {
+      if (values[char.toLowerCase()]) {
+        if (char === char.toUpperCase()) whiteMat += values[char.toLowerCase()]
+        else blackMat += values[char.toLowerCase()]
       }
     }
-    return tabs
-  })
-
-  const filteredGames = computed(() => {
-    let list = activeSource.value
-    if (tcFilter.value !== 'all') list = list.filter(g => tcKey(g) === tcFilter.value)
-    const q = opponentSearch.value.trim().toLowerCase()
-    if (q) {
-      list = list.filter(g =>
-        (g.white?.username || '').toLowerCase().includes(q) ||
-        (g.black?.username || '').toLowerCase().includes(q)
-      )
-    }
-    return list
-  })
-
-  const overallStats = computed(() => statsFor(filteredGames.value))
-
-  const displayedGroups = computed(() => {
-    const keys = tcFilter.value === 'all'
-      ? TC_ORDER.filter(k => tcCounts.value.has(k))
-      : [tcFilter.value]
-    return keys
-      .map(key => {
-        const groupGames = filteredGames.value
-          .filter(g => tcKey(g) === key)
-          .sort((a, b) => sortValue(b) - sortValue(a))
-        return { key, label: TC_LABELS[key] || key, games: groupGames, stats: statsFor(groupGames) }
-      })
-      .filter(g => g.games.length > 0)
-  })
-
-  function sortValue(g) {
-    const d = g.date ? g.date.getTime() : 0
-    return d || g.savedAt || 0
+    return { whiteMat, blackMat }
   }
 
-  function statsFor(list) {
-    const s = { w: 0, l: 0, d: 0 }
-    for (const g of list) {
-      const o = formatResult(g).outcome
-      if (o === 'win') s.w++
-      else if (o === 'loss') s.l++
-      else s.d++
+  function getGamePhases(uciList) {
+    const c = new Chess()
+    let openingEndPly = 12
+    let endgameStartPly = Infinity
+    for (let i = 0; i < uciList.length; i++) {
+      c.move(uciList[i])
+      const fen = c.fen()
+      const { whiteMat, blackMat } = calculateMaterialBalance(fen)
+      if ((whiteMat < 14 && blackMat < 14) || (whiteMat < 10 || blackMat < 10)) {
+        if (i >= openingEndPly) { endgameStartPly = i + 1; break }
+      }
     }
-    return s
+    return {
+      opening: [0, Math.min(openingEndPly, uciList.length)],
+      middlegame: [openingEndPly, Math.min(endgameStartPly, uciList.length)],
+      endgame: [endgameStartPly, uciList.length]
+    }
   }
 
-  async function fetchSavedGames() {
-    if (!currentUser.value) return
-    try {
-      const q = query(
-        collection(db, `users/${currentUser.value.uid}/games`),
-        orderBy('createdAt', 'desc')
-      )
-      const querySnapshot = await getDocs(q)
-      savedGames.value = querySnapshot.docs.map(d => {
-        const data = d.data()
-        return {
-          id: d.id,
-          pgn: data.pgn || "",
-          time_class: data.time_class || "unknown",
-          savedAt: data.createdAt?.toMillis?.() || 0,
-          date: typeof data.playedAt === 'number' ? new Date(data.playedAt) : null,
-          white: {
-            username: data.white?.username || "White",
-            rating: data.white?.rating || 0,
-            result: data.white?.result || "unknown"
-          },
-          black: {
-            username: data.black?.username || "Black",
-            rating: data.black?.rating || 0,
-            result: data.black?.result || "unknown"
+  function bucketLabel(moveNum) {
+    if (moveNum <= 10) return '1-10'
+    if (moveNum <= 20) return '11-20'
+    if (moveNum <= 30) return '21-30'
+    if (moveNum <= 40) return '31-40'
+    return '41+'
+  }
+
+  function resultForColor(color) {
+    if (gameResult.value === '1-0') return color === 'white' ? 'win' : 'lose'
+    if (gameResult.value === '0-1') return color === 'black' ? 'win' : 'lose'
+    if (gameResult.value === '1/2-1/2') return 'draw'
+    return 'unknown'
+  }
+
+  async function saveGameInsights() {
+    if (!currentUserId.value || !pendingGameMeta) return
+
+    const uciList = []
+    let curr = moveTree.children[0]
+    while (curr) { uciList.push(curr.uci); curr = curr.children[0] }
+    if (uciList.length === 0) return
+
+    const myColor = pendingGameMeta.myColor === 'black' ? 'black' : 'white'
+
+    const weights = { brilliant: 100, great: 100, best: 100, book: 100, excellent: 90, good: 80, inaccuracy: 20, mistake: 10, blunder: 0 }
+    const myCounts = { brilliant: 0, great: 0, best: 0, book: 0, excellent: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 }
+    let myWeightedSum = 0
+    let myMoveCount = 0
+    const moveBuckets = {}
+
+    let node = moveTree.children[0]
+    let ply = 1
+    while (node) {
+      const side = ply % 2 === 1 ? 'white' : 'black'
+      if (side === myColor && node.accuracy && myCounts.hasOwnProperty(node.accuracy)) {
+        const w = weights[node.accuracy] ?? 0
+        myCounts[node.accuracy]++
+        myWeightedSum += w
+        myMoveCount++
+        const label = bucketLabel(Math.ceil(ply / 2))
+        if (!moveBuckets[label]) moveBuckets[label] = { sum: 0, count: 0 }
+        moveBuckets[label].sum += w
+        moveBuckets[label].count++
+      }
+      node = node.children[0]
+      ply++
+    }
+
+    const overallAccuracy = myMoveCount > 0 ? (myWeightedSum / myMoveCount) : null
+
+    const phases = getGamePhases(uciList)
+    const phaseAccuracy = { opening: null, middlegame: null, endgame: null }
+    const phaseCounts = { opening: 0, middlegame: 0, endgame: 0 }
+    for (const [phase, [start, end]] of Object.entries(phases)) {
+      let phaseSum = 0, phaseCount = 0
+      let n = moveTree.children[0]
+      let p = 1
+      while (n) {
+        const side = p % 2 === 1 ? 'white' : 'black'
+        if (p > start && p <= end && side === myColor && n.accuracy) {
+          phaseSum += weights[n.accuracy] ?? 0
+          phaseCount++
+        }
+        n = n.children[0]
+        p++
+      }
+      if (phaseCount > 0) phaseAccuracy[phase] = phaseSum / phaseCount
+      phaseCounts[phase] = phaseCount
+    }
+
+    const blunderSquares = {}
+    const goodSquares = {}
+    let trackNode = moveTree.children[0]
+    let trackPly = 1
+    while (trackNode) {
+      const side = trackPly % 2 === 1 ? 'white' : 'black'
+      if (side === myColor) {
+        const square = trackNode.uci.slice(2, 4)
+        if (trackNode.accuracy === 'blunder' || trackNode.accuracy === 'mistake') {
+          blunderSquares[square] = (blunderSquares[square] || 0) + 1
+        } else if (['brilliant', 'great', 'best', 'excellent'].includes(trackNode.accuracy)) {
+          goodSquares[square] = (goodSquares[square] || 0) + 1
+        }
+      }
+      trackNode = trackNode.children[0]
+      trackPly++
+    }
+
+    const pieceStats = { p: { count: 0, sum: 0 }, n: { count: 0, sum: 0 }, b: { count: 0, sum: 0 }, r: { count: 0, sum: 0 }, q: { count: 0, sum: 0 }, k: { count: 0, sum: 0 } }
+    let pieceNode = moveTree.children[0]
+    let piecePly = 1
+    while (pieceNode) {
+      const side = piecePly % 2 === 1 ? 'white' : 'black'
+      if (side === myColor && pieceNode.accuracy && pieceNode.san) {
+        let piece = 'p'
+        const firstChar = pieceNode.san[0]
+        if (['N', 'B', 'R', 'Q', 'K'].includes(firstChar)) piece = firstChar.toLowerCase()
+        pieceStats[piece].count++
+        pieceStats[piece].sum += weights[pieceNode.accuracy] ?? 0
+      }
+      pieceNode = pieceNode.children[0]
+      piecePly++
+    }
+
+    const toCp = (ev) => {
+      if (!ev) return null
+      if (ev.type === 'mate') return Math.sign(ev.value) * 10000
+      return ev.value
+    }
+    const fromMyPerspective = (cpv) => (myColor === 'white' ? cpv : -cpv)
+    const myMat = (fen) => {
+      const { whiteMat, blackMat } = calculateMaterialBalance(fen)
+      return myColor === 'white' ? whiteMat : blackMat
+    }
+
+    let checks = 0, captures = 0, sacrifices = 0
+    let inducedErrors = 0
+    let cpLost = 0, cpWon = 0
+    let bigSwingsFor = 0, bigSwingsAgainst = 0
+    let defendSum = 0, defendCount = 0
+    let attackSum = 0, attackCount = 0
+    let myLastMoveWasStrong = false
+
+    const STRONG = ['brilliant', 'great', 'best', 'excellent']
+    const ERROR_WEIGHT = { inaccuracy: 1, mistake: 2, blunder: 3 }
+
+    let prevNode = moveTree
+    let tNode = moveTree.children[0]
+    let tPly = 1
+    while (tNode) {
+      const side = tPly % 2 === 1 ? 'white' : 'black'
+      const isMine = side === myColor
+      const before = toCp(prevNode.analysisData?.eval)
+      const after = toCp(tNode.analysisData?.eval)
+      const delta = (before !== null && after !== null) ? fromMyPerspective(after) - fromMyPerspective(before) : null
+
+      if (isMine) {
+        if (tNode.san?.includes('+') || tNode.san?.includes('#')) checks++
+        if (tNode.san?.includes('x')) captures++
+        if (delta !== null) {
+          if (delta < 0) cpLost += Math.min(-delta, 1000)
+          if (delta <= -150) bigSwingsAgainst++
+          const w = weights[tNode.accuracy]
+          if (w !== undefined) {
+            const stance = fromMyPerspective(before)
+            if (stance <= -150) { defendSum += w; defendCount++ }
+            else if (stance >= 150) { attackSum += w; attackCount++ }
           }
         }
-      })
-    } catch (e) {
-      console.error("Failed to fetch saved games:", e)
-      savedGames.value = []
-    }
-  }
-
-  function generatePgnHash(pgn) {
-    let hash = 0
-    for (let i = 0; i < pgn.length; i++) {
-      const char = pgn.charCodeAt(i)
-      hash = (hash << 5) - hash + char
-      hash &= hash
-    }
-    return String(hash)
-  }
-
-  async function autoSaveGame() {
-    if (!currentUser.value || !selectedGame.value) return
-    try {
-      const gamesRef = collection(db, `users/${currentUser.value.uid}/games`)
-      const pgnHash = generatePgnHash(selectedGame.value.pgn)
-
-      const dupQ = query(gamesRef, where('pgnHash', '==', pgnHash))
-      const dupSnap = await getDocs(dupQ)
-      if (!dupSnap.empty) return
-
-      await addDoc(gamesRef, {
-        pgn: selectedGame.value.pgn,
-        pgnHash: pgnHash,
-        white: selectedGame.value.white,
-        black: selectedGame.value.black,
-        time_class: selectedGame.value.time_class,
-        playedAt: selectedGame.value.date ? selectedGame.value.date.getTime() : null,
-        createdAt: serverTimestamp()
-      })
-      await fetchSavedGames()
-    } catch (e) {
-      console.error('Auto-save failed:', e)
-      saveStatus.value = 'Failed to save game.'
-      setTimeout(() => saveStatus.value = '', 2500)
-    }
-  }
-
-  async function deleteSavedGame(gameId, event) {
-    if (event) event.stopPropagation()
-    if (!confirm('Delete this game?')) return
-    try {
-      await deleteDoc(doc(db, `users/${currentUser.value.uid}/games`, gameId))
-      savedGames.value = savedGames.value.filter(g => g.id !== gameId)
-      if (selectedGame.value?.id === gameId) selectedGame.value = null
-    } catch (e) { console.error(e) }
-  }
-
-  const pgnText = ref('')
-  const fenText = ref('')
-  const isPasteSource = computed(() =>
-    importSite.value === 'pgn' || importSite.value === 'fen' || importSite.value === 'library'
-  )
-
-  // --- Helper to clean PGNs before chess.js parses them ---
-  function cleanPgn(pgn) {
-    if (!pgn) return ''
-    let cleaned = pgn
-      .replace(/\{[^}]*\}/g, ' ')   // Remove comments
-      .replace(/\$\d+/g, ' ')        // Remove NAGs
-      .replace(/\s*e\.p\.\s*/g, ' ') // Remove en passant annotations
-
-    // Remove nested variations
-    let prev
-    do {
-      prev = cleaned
-      cleaned = cleaned.replace(/\([^()]*\)/g, ' ')
-    } while (cleaned !== prev)
-
-    // Normalize whitespace
-    cleaned = cleaned.replace(/\s+/g, ' ').trim()
-    return cleaned
-  }
-
-  function normalizeChessCom(g) {
-    return {
-      pgn: cleanPgn(g.pgn || ''),
-      time_class: g.time_class || 'unknown',
-      date: g.end_time ? new Date(g.end_time * 1000) : null,
-      white: { username: g.white?.username || 'White', rating: g.white?.rating || 0, result: g.white?.result || 'unknown' },
-      black: { username: g.black?.username || 'Black', rating: g.black?.rating || 0, result: g.black?.result || 'unknown' }
-    }
-  }
-
-  function normalizeLichess(line) {
-    const lGame = JSON.parse(line)
-    let wRes = 'draw', bRes = 'draw'
-    if (lGame.winner === 'white') { wRes = 'win'; bRes = 'lose' }
-    else if (lGame.winner === 'black') { wRes = 'lose'; bRes = 'win' }
-    const ts = lGame.lastMoveAt || lGame.createdAt
-    return {
-      pgn: cleanPgn(lGame.pgn || ""),
-      time_class: lGame.speed || "unknown",
-      date: ts ? new Date(ts) : null,
-      white: { username: lGame.players?.white?.user?.name || "Anonymous", rating: lGame.players?.white?.rating || 0, result: wRes },
-      black: { username: lGame.players?.black?.user?.name || "Anonymous", rating: lGame.players?.black?.rating || 0, result: bRes }
-    }
-  }
-
-  // ---------------------------------------------------------------------
-  // Chess.com fetching, with freshness fixes:
-  //  1. `cache: 'no-store'` — never serve the response from the browser cache.
-  //  2. `?t=<timestamp>`  — bust Chess.com's CDN cache (each request is a
-  //     unique URL). Chess.com ignores unknown query params, so this is safe.
-  //     (Lichess rejects unknown params, so we do NOT add it there.)
-  //  3. "Last game" fetches the CURRENT month directly instead of trusting
-  //     the CDN-cached archives list, which can lag behind.
-  // ---------------------------------------------------------------------
-  function bust(url) {
-    return `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`
-  }
-
-  async function fetchChessComJson(url) {
-    const res = await fetch(bust(url), { cache: 'no-store' })
-    if (!res.ok) throw new Error(`Chess.com request failed (${res.status})`)
-    return res.json()
-  }
-
-  async function fetchChessComRange(user, yr, mo) {
-    const paddedMonth = String(mo).padStart(2, '0')
-    const data = await fetchChessComJson(`https://api.chess.com/pub/player/${user}/games/${yr}/${paddedMonth}`)
-    return (data.games || []).map(normalizeChessCom)
-  }
-
-  async function fetchChessComLast(user) {
-    // Chess.com files games by UTC month, so work in UTC.
-    const now = new Date()
-    let y = now.getUTCFullYear()
-    let m = now.getUTCMonth() + 1
-
-    // Try the current month, then the previous month (covers the start of a
-    // new UTC month, and the 404s/empty months when a player hasn't played).
-    const candidates = [[y, m]]
-    m -= 1
-    if (m === 0) { m = 12; y -= 1 }
-    candidates.push([y, m])
-
-    for (const [yy, mm] of candidates) {
-      try {
-        const monthGames = await fetchChessComRange(user, yy, mm)
-        if (monthGames.length) return [monthGames[monthGames.length - 1]]
-      } catch (e) {
-        // Month may not exist / no games — try the next candidate.
-      }
-    }
-
-    // Last resort: no games in the last ~2 months, use the archives list.
-    const data = await fetchChessComJson(`https://api.chess.com/pub/player/${user}/games/archives`)
-    const archives = data.archives || []
-    if (!archives.length) throw new Error('No games found for this player.')
-    const lastData = await fetchChessComJson(archives[archives.length - 1])
-    const monthGames = (lastData.games || []).map(normalizeChessCom)
-    if (!monthGames.length) throw new Error('No games found in the latest archive.')
-    return [monthGames[monthGames.length - 1]]
-  }
-
-  async function fetchLichessRange(user, yr, mo) {
-    const startDate = new Date(Date.UTC(yr, mo - 1, 1)).getTime()
-    const endDate = new Date(Date.UTC(yr, mo, 1)).getTime()
-    const res = await fetch(`https://lichess.org/api/games/user/${user}?since=${startDate}&until=${endDate}&pgnInJson=true`, {
-      headers: { 'Accept': 'application/x-ndjson' },
-      cache: 'no-store'
-    })
-    if (!res.ok) throw new Error('Failed to fetch from Lichess')
-    const text = await res.text()
-    if (!text.trim()) return []
-    return text.trim().split('\n').map(normalizeLichess)
-  }
-
-  async function fetchLichessLast(user) {
-    const res = await fetch(`https://lichess.org/api/games/user/${user}?max=1&pgnInJson=true`, {
-      headers: { 'Accept': 'application/x-ndjson' },
-      cache: 'no-store'
-    })
-    if (!res.ok) throw new Error('Failed to fetch from Lichess')
-    const text = await res.text()
-    if (!text.trim()) throw new Error('No games found for this player.')
-    return [normalizeLichess(text.trim().split('\n')[0])]
-  }
-
-  function buildGameFromPgn(pgn) {
-    const c = new Chess()
-    const cleanedPgn = cleanPgn(pgn)
-
-    // Helper to extract headers manually if standard parsing fails
-    const extractHeader = (key) => {
-      const match = new RegExp(`\\[${key} "(.*?)"\\]`).exec(pgn)
-      return match ? match[1] : ''
-    }
-
-    let parsedSuccessfully = false
-    try {
-      c.loadPgn(cleanedPgn)
-      if (c.history().length > 0) parsedSuccessfully = true
-    } catch (e) {
-      console.warn("Standard loadPgn failed, attempting fallback recovery...", e.message)
-    }
-
-    if (parsedSuccessfully) {
-      const headers = c.getHeaders?.() || {}
-      const whiteName = headers.White || extractHeader('White') || 'White'
-      const blackName = headers.Black || extractHeader('Black') || 'Black'
-      const whiteElo = headers.WhiteElo || extractHeader('WhiteElo')
-      const blackElo = headers.BlackElo || extractHeader('BlackElo')
-      const result = headers.Result || extractHeader('Result') || '*'
-
-      return {
-        pgn: cleanedPgn,
-        time_class: 'unknown',
-        date: null,
-        white: { username: whiteName, rating: Number(whiteElo) || 0, result: result === '1-0' ? 'win' : (result === '0-1' ? 'lose' : 'draw') },
-        black: { username: blackName, rating: Number(blackElo) || 0, result: result === '0-1' ? 'win' : (result === '1-0' ? 'lose' : 'draw') }
-      }
-    }
-
-    // Fallback parser for malformed PGNs (e.g. missing half-moves)
-    c.reset()
-    const movesStr = cleanedPgn.replace(/\[.*?\]/gs, '').replace(/\d+\.(\.\.)?/g, ' ').replace(/(1-0|0-1|1\/2-1\/2|\*)/g, '').trim()
-    const moves = movesStr.split(/\s+/).filter(m => m.length > 0)
-
-    let validMovesApplied = 0
-    for (let i = 0; i < moves.length; i++) {
-      const move = moves[i]
-      if (!move) continue
-      try {
-        c.move(move)
-        validMovesApplied++
-      } catch (err) {
-        // Toggle turn to see if a move was skipped
-        const fenParts = c.fen().split(' ')
-        fenParts[1] = fenParts[1] === 'w' ? 'b' : 'w'
-        fenParts[3] = '-' // Remove en passant target square
-        const newFen = fenParts.join(' ')
-
-        try {
-          const tempBoard = new Chess(newFen)
-          tempBoard.move(move)
-          // It worked! Apply it to the main board
-          c.load(newFen)
-          c.move(move)
-          validMovesApplied++
-        } catch (err2) {
-          console.error(`Skipped unrecoverable invalid move: ${move}`)
-          break
+        const reply = tNode.children[0] ?? null
+        const replyEval = reply ? toCp(reply.analysisData?.eval) : null
+        if (reply && before !== null && replyEval !== null) {
+          const materialLost = myMat(prevNode.fen) - myMat(reply.fen)
+          const windowDelta = fromMyPerspective(replyEval) - fromMyPerspective(before)
+          if (materialLost >= 2 && windowDelta >= -100) sacrifices++
         }
-      }
-    }
-
-    if (validMovesApplied === 0) throw new Error('No valid moves found in that PGN. Please check the format.')
-
-    const whiteName = extractHeader('White') || 'White'
-    const blackName = extractHeader('Black') || 'Black'
-    const whiteElo = extractHeader('WhiteElo')
-    const blackElo = extractHeader('BlackElo')
-    const result = extractHeader('Result') || '*'
-
-    // Generate a clean PGN from the successfully parsed moves
-    const cleanMovesPgn = c.pgn()
-    const headerStr = `[White "${whiteName}"]\n[Black "${blackName}"]\n[Result "${result}"]${whiteElo ? `\n[WhiteElo "${whiteElo}"]` : ''}${blackElo ? `\n[BlackElo "${blackElo}"]` : ''}`
-    const finalPgn = `${headerStr}\n\n${cleanMovesPgn} ${result}`.trim()
-
-    return {
-      pgn: finalPgn,
-      time_class: 'unknown',
-      date: null,
-      white: { username: whiteName, rating: Number(whiteElo) || 0, result: result === '1-0' ? 'win' : (result === '0-1' ? 'lose' : 'draw') },
-      black: { username: blackName, rating: Number(blackElo) || 0, result: result === '0-1' ? 'win' : (result === '1-0' ? 'lose' : 'draw') }
-    }
-  }
-
-  function validateFen(fen) {
-    const c = new Chess()
-    try { c.load(fen) } catch (e) { throw new Error('Could not parse that FEN.') }
-    return fen
-  }
-
-  async function chessImport() {
-    loading.value = true
-    error.value = null
-    info.value = null
-    games.value = []
-    selectedGame.value = null
-    tcFilter.value = 'all'
-    opponentSearch.value = ''
-    try {
-      if (importSite.value === 'pgn') {
-        if (!pgnText.value.trim()) throw new Error('Paste a PGN first.')
-        const game = buildGameFromPgn(pgnText.value.trim())
-        games.value = [game]
-        selectGame(game)
-        return
-      }
-      if (importSite.value === 'fen') {
-        if (!fenText.value.trim()) throw new Error('Paste a FEN first.')
-        const fen = validateFen(fenText.value.trim())
-        router.push({ path: '/', query: { fen } })
-        return
-      }
-      if (!username.value) throw new Error('Enter a username first.')
-
-      if (importMode.value === 'last') {
-        const lastGames = importSite.value === 'chess.com'
-          ? await fetchChessComLast(username.value)
-          : await fetchLichessLast(username.value)
-        games.value = lastGames
-
-        // Chess.com can take a few minutes to publish a just-finished game.
-        // If the newest published game is older than ~5 minutes, say so
-        // instead of silently looking broken.
-        if (importSite.value === 'chess.com') {
-          const lastDate = lastGames[0]?.date
-          const ageMin = lastDate ? (Date.now() - lastDate.getTime()) / 60000 : Infinity
-          if (ageMin > 5) {
-            info.value = 'Showing your most recent published game. Chess.com can take a few minutes to publish brand-new games — if yours is missing, try again shortly.'
-          }
-        }
-
-        if (lastGames.length) selectGame(lastGames[0])
+        myLastMoveWasStrong = STRONG.includes(tNode.accuracy)
       } else {
-        if (!year.value || month.value === 'month') throw new Error('Pick a year and month.')
-        const fetched = importSite.value === 'chess.com'
-          ? await fetchChessComRange(username.value, year.value, month.value)
-          : await fetchLichessRange(username.value, year.value, month.value)
-        // Both APIs return oldest-first; show newest first instead.
-        games.value = [...fetched].sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0))
+        if (delta !== null) {
+          if (delta > 0) cpWon += Math.min(delta, 1000)
+          if (delta >= 150) bigSwingsFor++
+        }
+        if (myLastMoveWasStrong && ERROR_WEIGHT[tNode.accuracy]) inducedErrors += ERROR_WEIGHT[tNode.accuracy]
+        myLastMoveWasStrong = false
       }
+      prevNode = tNode
+      tNode = tNode.children[0] ?? null
+      tPly++
+    }
 
-      if (games.value.length === 0) {
-        error.value = 'No games found for that search.'
+    let result = null
+    const resultMatch = (pendingGameMeta.pgn || '').match(/\[Result\s+"([^"]+)"\]/)
+    if (resultMatch) {
+      const r = resultMatch[1]
+      if (r === '1-0') result = myColor === 'white' ? 'win' : 'loss'
+      else if (r === '0-1') result = myColor === 'black' ? 'win' : 'loss'
+      else if (r === '1/2-1/2') result = 'draw'
+    }
+
+    const playstyle = {
+      v: 2,
+      myMoves: myMoveCount,
+      totalPlies: uciList.length,
+      checks, captures,
+      forcingMoves: checks + captures,
+      sacrifices, inducedErrors,
+      brilliantPlus: myCounts.brilliant + myCounts.great,
+      bookMoves: myCounts.book,
+      errors: { inaccuracy: myCounts.inaccuracy, mistake: myCounts.mistake, blunder: myCounts.blunder },
+      cpLost, cpWon, bigSwingsFor, bigSwingsAgainst,
+      defendSum, defendCount, attackSum, attackCount,
+      phaseCounts,
+      reachedEndgame: phases.endgame[0] < uciList.length ? 1 : 0,
+      result
+    }
+
+    const openingName = await fetchOpeningNameForSave(uciList)
+
+    const pgn = pendingGameMeta.pgn || chess.pgn()
+    function generatePgnHash(p) {
+      let hash = 0
+      for (let i = 0; i < p.length; i++) { hash = (hash << 5) - hash + p.charCodeAt(i); hash &= hash }
+      return String(hash)
+    }
+    const pgnHash = generatePgnHash(pgn)
+
+    const extractedPuzzles = []
+    let pNode = moveTree.children[0]
+    let pPly = 1
+    while (pNode) {
+      const side = pPly % 2 === 1 ? 'white' : 'black'
+      if (side === myColor && (pNode.accuracy === 'blunder' || pNode.accuracy === 'mistake')) {
+        if (pNode.parent && pNode.analysisData?.best_move) {
+          const beforeEval = pNode.parent.analysisData?.eval
+          const afterEval = pNode.analysisData.eval
+          if (beforeEval && afterEval) {
+            const beforeCp = beforeEval.type === 'mate' ? Math.sign(beforeEval.value) * 10000 : beforeEval.value
+            const afterCp = afterEval.type === 'mate' ? Math.sign(afterEval.value) * 10000 : afterEval.value
+            let isPuzzleWorthy = false
+            if (side === 'white') {
+              if (beforeCp >= -300 && afterCp <= 300 && (beforeCp - afterCp >= 200)) isPuzzleWorthy = true
+            } else {
+              if (beforeCp <= 300 && afterCp >= -300 && (afterCp - beforeCp >= 200)) isPuzzleWorthy = true
+            }
+            if (isPuzzleWorthy) {
+              extractedPuzzles.push({
+                fen: pNode.parent.fen,
+                bestMove: pNode.analysisData.best_move,
+                playedMove: pNode.uci,
+                playedMoveAccuracy: pNode.accuracy,
+                turn: side,
+                eval: { type: afterEval.type, value: afterEval.value },
+                swing: Math.abs(beforeCp - afterCp),
+                continuation: Array.isArray(pNode.analysisData.best_line) ? pNode.analysisData.best_line.slice(0, 5) : [],
+                mateIn: beforeEval.type === 'mate' ? Math.abs(beforeEval.value) : null
+              })
+            }
+          }
+        }
       }
-    } catch (e) {
-      error.value = e.message
-      console.error(e)
-    } finally {
-      loading.value = false
+      pNode = pNode.children[0]
+      pPly++
+    }
+
+    const whitePlayer = { username: whiteName.value || 'White', rating: whiteRating.value || 0, result: resultForColor('white') }
+    const blackPlayer = { username: blackName.value || 'Black', rating: blackRating.value || 0, result: resultForColor('black') }
+
+    const insightsPayload = {
+      myColor,
+      overallAccuracy,
+      phaseAccuracy,
+      moveCounts: myCounts,
+      totalMoves: myMoveCount,
+      opening: openingName,
+      blunderSquares,
+      goodSquares,
+      pieceStats,
+      playstyle,
+      moveBuckets
+    }
+
+    const gamesRef = collection(db, `users/${currentUserId.value}/games`)
+    const dupQ = query(gamesRef, where('pgnHash', '==', pgnHash))
+    const dupSnap = await getDocs(dupQ)
+
+    if (!dupSnap.empty) {
+      const gameDoc = dupSnap.docs[0]
+      const gameDocData = gameDoc.data()
+      const existingPuzzles = gameDocData.puzzles || []
+      const mergedPuzzles = extractedPuzzles.map(newP => {
+        const oldP = existingPuzzles.find(p => p.fen === newP.fen && p.bestMove === newP.bestMove)
+        return oldP ? {
+          ...newP,
+          solved: oldP.solved || false,
+          solvedAt: oldP.solvedAt ?? null,
+          reps: oldP.reps ?? 0,
+          dueAt: oldP.dueAt ?? null
+        } : newP
+      })
+      await updateDoc(doc(db, `users/${currentUserId.value}/games`, gameDoc.id), {
+        insights: insightsPayload,
+        puzzles: mergedPuzzles,
+        white: whitePlayer,
+        black: blackPlayer
+      })
+    } else {
+      await addDoc(gamesRef, {
+        pgn,
+        pgnHash,
+        white: whitePlayer,
+        black: blackPlayer,
+        time_class: 'unknown',
+        createdAt: serverTimestamp(),
+        insights: insightsPayload,
+        puzzles: extractedPuzzles
+      })
     }
   }
 
-  function isSelected(game) {
-    if (!selectedGame.value) return false
-    if (selectedGame.value === game) return true
-    return !!game.id && selectedGame.value.id === game.id
-  }
-
-  function selectGame(game) {
-    // Ensure the PGN is cleaned before processing to avoid chess.js errors
-    if (game && game.pgn) {
-      game.pgn = cleanPgn(game.pgn)
-    }
-
-    selectedGame.value = game
-    gameUci.value = convertPgnToUci(game.pgn)
-    reviewMoves.value = gameUci.value
-    reviewIndex.value = 0
-    chess.reset()
-
-    const tempChess = new Chess()
-    moveslist.value = gameUci.value.map(uci => {
-      const m = tempChess.move({ from: uci.substring(0, 2), to: uci.substring(2, 4), promotion: uci[4] })
-      return m ? m.san : uci
-    })
-  }
-
-  function convertPgnToUci(pgn) {
-    const cleanedPgn = cleanPgn(pgn)
-    if (!cleanedPgn) return []
-    const c = new Chess()
+  async function fetchOpeningNameForSave(uciList) {
+    const OPENING_LOOKUP_PLIES = 12
+    const playList = uciList.slice(0, OPENING_LOOKUP_PLIES)
+    const bookList = playList.join(",")
+    const url = bookList
+      ? `../../api/explorer?db=masters&play=${encodeURIComponent(bookList)}`
+      : `../../api/explorer?db=masters`
     try {
-      c.loadPgn(cleanedPgn)
+      const response = await fetch(url)
+      if (!response.ok) return "Unknown Opening"
+      const data = await response.json()
+      return data.opening?.name || "Unknown Opening"
     } catch (e) {
-      console.error('convertPgnToUci PGN parse error:', e)
-      return []
+      console.warn("Opening lookup for insights failed:", e)
+      return "Unknown Opening"
     }
-    return c.history({ verbose: true }).map(move => {
-      let uci = move.from + move.to
-      if (move.promotion) uci += move.promotion
-      return uci
-    })
-  }
-
-  function formatDate(game) {
-    if (!game?.date || isNaN(game.date.getTime())) return ''
-    const d = game.date
-    const sameYear = d.getFullYear() === new Date().getFullYear()
-    return d.toLocaleDateString(undefined, sameYear
-      ? { month: 'short', day: 'numeric' }
-      : { month: 'short', day: 'numeric', year: '2-digit' })
-  }
-
-  // Chess.com result strings that mean the player LOST (timeout was missing
-  // before, so losses on time were displayed as draws).
-  const LOSS_RESULTS = ['resigned', 'checkmated', 'abandoned', 'lose', 'timeout', 'kingofthehill', 'threecheck', 'bughousepartnerlose']
-
-  function formatResult(game) {
-    const myUsername = (username.value || '').trim().toLowerCase()
-    const whiteUsername = (game.white?.username || '').toLowerCase()
-    const blackUsername = (game.black?.username || '').toLowerCase()
-
-    // Only trust the color match if the username actually matches a player;
-    // otherwise default to White's perspective.
-    const matched = myUsername && (whiteUsername === myUsername || blackUsername === myUsername)
-    const isWhite = matched ? whiteUsername === myUsername : true
-
-    const me = isWhite ? (game.white || {}) : (game.black || {})
-    const opponent = isWhite ? (game.black || {}) : (game.white || {})
-
-    let result = '½-½'
-    let outcome = 'draw'
-    if (me.result === 'win') {
-      result = isWhite ? '1-0' : '0-1'
-      outcome = 'win'
-    } else if (LOSS_RESULTS.includes(me.result)) {
-      result = isWhite ? '0-1' : '1-0'
-      outcome = 'loss'
-    }
-
-    return {
-      opponent: opponent.username || 'Unknown',
-      result,
-      outcome,
-      myColor: isWhite ? 'White' : 'Black',
-      myRating: me.rating || 0,
-      oppRating: opponent.rating || 0
-    }
-  }
-
-  async function analyseGame() {
-    if (!selectedGame.value || gameUci.value.length === 0) return
-
-    if (currentUser.value) {
-      saveStatus.value = 'Saving to library…'
-      await autoSaveGame()
-      saveStatus.value = 'Saved to library ✓'
-      setTimeout(() => saveStatus.value = '', 2500)
-    }
-
-    const moveString = gameUci.value.join('-')
-
-    // Determine the user's actual color by matching usernames
-    const myUsername = (username.value || '').trim().toLowerCase()
-    const whiteUsername = (selectedGame.value.white?.username || '').toLowerCase()
-    const blackUsername = (selectedGame.value.black?.username || '').toLowerCase()
-    const matched = myUsername && (whiteUsername === myUsername || blackUsername === myUsername)
-    const myColor = matched ? (whiteUsername === myUsername ? 'white' : 'black') : 'white'
-
-    router.push({
-      path: '/',
-      query: {
-        moves: moveString,
-        white: selectedGame.value.white.username,
-        black: selectedGame.value.black.username,
-        whiteRating: selectedGame.value.white.rating,
-        blackRating: selectedGame.value.black.rating,
-        pgn: selectedGame.value.pgn,
-        myColor
-      }
-    })
   }
 </script>
 
 <template>
-  <div class="page-layout">
-    <Title/>
-    <div class="content-area">
-      <div class="import-card">
-        <div class="card-header">
-          <h1 class="import-title">Import a game</h1>
-          <p class="import-subtitle">Pull a game from Chess.com or Lichess, paste PGN/FEN, or browse your library.</p>
+  <SettingsPanel
+    v-model:isOpen="isSettingsOpen"
+    v-model:targetDepth="targetDepth"
+    v-model:soundOn="soundOn"
+    v-model:showBestArrow="showBestArrow"
+    v-model:boardTheme="currentTheme"
+    @depthChanged="onDepthChange"
+  />
+  <Transition name="loading-fade">
+    <div v-if="isImporting" class="analysis-loading-overlay">
+      <div class="loading-content">
+        <div class="loading-spinner">
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
         </div>
-
-        <div class="site-toggle">
-          <button class="site-btn" :class="{ active: importSite === 'chess.com' }" @click="importSite = 'chess.com'">Chess.com</button>
-          <button class="site-btn" :class="{ active: importSite === 'lichess' }" @click="importSite = 'lichess'">Lichess</button>
-          <button class="site-btn" :class="{ active: importSite === 'pgn' }" @click="importSite = 'pgn'">PGN</button>
-          <button class="site-btn" :class="{ active: importSite === 'fen' }" @click="importSite = 'fen'">FEN</button>
-          <button class="site-btn" :class="{ active: importSite === 'library' }" @click="importSite = 'library'">My Library</button>
+        <p class="loading-title">Analyzing Game</p>
+        <p class="loading-subtitle">Move {{ importProgress.current }} / {{ importProgress.total }} · Depth {{ targetDepth }}</p>
+        <div class="loading-progress-bar">
+          <div class="loading-progress-fill" :style="{ width: importProgressPercent + '%' }"></div>
         </div>
-
-        <div v-if="importSite === 'library' && !currentUser" class="empty-library">
-          Please log in from the top right corner to access your saved games.
+        <div class="loading-tips">
+          <p class="loading-tip">Review stuck? A quick page refresh usually fixes it.</p>
+          <p class="loading-tip">Feels slow? Try lowering the engine depth in Settings.</p>
         </div>
-        <div v-else-if="importSite === 'library' && savedGames.length === 0" class="empty-library">
-          Your library is empty. Analyze a game and it will be saved here automatically.
+        <button class="cancel-import-btn" @click="cancelImport">Cancel review</button>
+      </div>
+    </div>
+  </Transition>
+  <div class="grid-layout">
+    <Title class="title-slot" />
+    <div class="board-area">
+      <div class="board-wrapper" ref="boardRef">
+        <div class="player-bar" v-if="hasPlayerInfo">
+          <span class="player-color-dot" :class="topPlayer.side"></span>
+          <span class="player-name">{{ topPlayer.name }}</span>
+          <span v-if="topPlayer.isWinner" class="winner-crown">👑</span>
+          <span class="player-rating" v-if="topPlayer.rating">{{ topPlayer.rating }}</span>
         </div>
-
-        <div class="mode-toggle" v-if="!isPasteSource">
-          <button class="mode-btn" :class="{ active: importMode === 'last' }" @click="importMode = 'last'">Last game</button>
-          <button class="mode-btn" :class="{ active: importMode === 'range' }" @click="importMode = 'range'">By month</button>
-        </div>
-
-        <div class="controls" v-if="!isPasteSource">
-          <label class="field">
-            <span class="field-label">Username</span>
-            <input v-model="username" placeholder="e.g. magnuscarlsen" class="input" @keyup.enter="chessImport" />
-          </label>
-          <template v-if="importMode === 'range'">
-            <label class="field field-small">
-              <span class="field-label">Year</span>
-              <div class="select-wrapper">
-                <select v-model="year" class="input select-input">
-                  <option value="" disabled>Select Year</option>
-                  <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
-                </select>
-                <svg class="dropdown-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </div>
-            </label>
-            <label class="field field-small">
-              <span class="field-label">Month</span>
-              <div class="select-wrapper">
-                <select v-model="month" class="input select-input">
-                  <option value="month" disabled>Select Month</option>
-                  <option v-for="(name, i) in monthNames" :key="i" :value="i + 1">{{ name }}</option>
-                </select>
-                <svg class="dropdown-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </div>
-            </label>
-          </template>
-          <button class="import-btn" @click="chessImport" :disabled="loading">
-            <span v-if="loading" class="spinner"></span>
-            {{ loading ? 'Fetching…' : (importMode === 'last' ? 'Get last game' : 'Search games') }}
-          </button>
-        </div>
-
-        <div class="paste-controls" v-if="importSite === 'pgn'">
-          <label class="field">
-            <span class="field-label">PGN</span>
-            <textarea v-model="pgnText" class="input textarea" rows="6" placeholder='[Event "Casual Game"]&#10;1. e4 e5 2. Nf3 Nc6 3. Bb5 ...'></textarea>
-          </label>
-          <button class="import-btn" @click="chessImport" :disabled="loading">
-            <span v-if="loading" class="spinner"></span>
-            {{ loading ? 'Parsing…' : 'Load PGN' }}
-          </button>
-        </div>
-
-        <div class="paste-controls" v-if="importSite === 'fen'">
-          <label class="field">
-            <span class="field-label">FEN</span>
-            <textarea v-model="fenText" class="input textarea textarea-fen" rows="2" placeholder="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"></textarea>
-          </label>
-          <button class="import-btn" @click="chessImport" :disabled="loading">
-            <span v-if="loading" class="spinner"></span>
-            {{ loading ? 'Loading…' : 'Load FEN' }}
-          </button>
-        </div>
-
-        <div v-if="error" class="error">{{ error }}</div>
-        <div v-if="info" class="info-note">{{ info }}</div>
-        <div v-if="saveStatus" class="save-toast">{{ saveStatus }}</div>
-
-        <!-- Results browser: shared by fetched games and My Library -->
-        <div v-if="activeSource.length" class="results">
-          <div class="results-meta">
-            <span class="results-count">
-              <template v-if="activeSource.length > 1">{{ filteredGames.length }} of {{ activeSource.length }} games</template>
-              <template v-else>1 game</template>
-            </span>
-            <span class="results-record">
-              <span class="rec-w">{{ overallStats.w }}W</span>
-              <span class="rec-l">{{ overallStats.l }}L</span>
-              <span class="rec-d">{{ overallStats.d }}D</span>
-            </span>
+        <div class="board-row">
+          <div class="board-col">
+            <TheChessboard
+              class="game-board"
+              @move="handleBothMoves"
+              @board-created="onBoardCreated"
+              :board-config="{ coordinates: true, animation: { enabled: false } }"
+            />
+            <img v-if="lastMoveSquare && lastMoveAccuracy" :src="accuracySymbol(lastMoveAccuracy)" class="board-acc-icon" :style="squareStyle(lastMoveSquare)" />
           </div>
-
-          <div class="results-toolbar" v-if="activeSource.length > 1">
-            <div class="tc-chips">
-              <button
-                v-for="tab in timeControlTabs"
-                :key="tab.value"
-                class="tc-chip"
-                :class="[tab.value, { active: tcFilter === tab.value }]"
-                @click="tcFilter = tab.value"
-              >
-                {{ tab.label }}<span class="chip-count">{{ tab.count }}</span>
-              </button>
+          <div class="evalbar">
+            <div class="evalbar-inner">
+              <template v-if="!isFlipped">
+                <div class="blackeval" :style="{ height: height + '%', borderRadius: '10px 10px 0 0' }"></div>
+                <div class="whiteeval" :style="{ height: (100 - height) + '%', borderRadius: '0 0 10px 10px' }"></div>
+              </template>
+              <template v-else>
+                <div class="whiteeval" :style="{ height: (100 - height) + '%', borderRadius: '10px 10px 0 0' }"></div>
+                <div class="blackeval" :style="{ height: height + '%', borderRadius: '0 0 10px 10px' }"></div>
+              </template>
             </div>
-            <input v-model="opponentSearch" class="input search-input" placeholder="Filter by player…" />
+            <p class="evalnum">{{ formatEval(moveData?.eval) }}</p>
           </div>
-
-          <div class="games-list">
-            <section v-for="group in displayedGroups" :key="group.key" class="tc-group">
-              <header class="tc-group-header">
-                <span class="tc-badge" :class="group.key"></span>
-                <span class="tc-name">{{ group.label }}</span>
-                <span class="tc-stats">
-                  {{ group.games.length }} {{ group.games.length === 1 ? 'game' : 'games' }} ·
-                  <span class="rec-w">{{ group.stats.w }}W</span>
-                  <span class="rec-l">{{ group.stats.l }}L</span>
-                  <span class="rec-d">{{ group.stats.d }}D</span>
-                </span>
-              </header>
+        </div>
+        <div class="player-bar bottom" v-if="hasPlayerInfo">
+          <span class="player-color-dot" :class="bottomPlayer.side"></span>
+          <span class="player-name">{{ bottomPlayer.name }}</span>
+          <span v-if="bottomPlayer.isWinner" class="winner-crown">👑</span>
+          <span class="player-rating" v-if="bottomPlayer.rating">{{ bottomPlayer.rating }}</span>
+        </div>
+        <div class="boardtools">
+          <button class="jumpstart" @click="goToStart" :disabled="isImporting || currentNode.parent === null" title="Jump to start">&lt;&lt;</button>
+          <button class="undo" @click="undoAccuracy" title="previous" :disabled="isImporting || currentNode.parent === null">&lt;-</button>
+          <button class="reverse" @click="flipBoard" title="flip board">↳↰</button>
+          <button class="redo" title="next" @click="redoAccuracy" :disabled="isImporting || currentNode.children.length === 0">-&gt;</button>
+          <button class="jumpend" @click="goToEnd" :disabled="isImporting || currentNode.children.length === 0" title="Jump to end">&gt;&gt;</button>
+        </div>
+      </div>
+    </div>
+    <div class="analysis-container">
+      <div class="analyze">
+        <div class="analyzis-header">
+          <h2 class="analyzis">Analysis <span v-if="isAnalyzing" class="thinking-dot" title="Engine is thinking"></span></h2>
+          <button class="settings-btn" @click="isSettingsOpen = true" title="Settings">⚙️</button>
+        </div>
+        <div v-if="moveData" class="move-data">
+          <p class="depthnum">Depth {{ currentDepth }}</p>
+          <div class="line pretty-scroll">
+            <span class="evalnum2">{{ formatEval(moveData?.eval) }}</span>
+            <span v-for="(move, idx) in sanLine" :key="'best-' + idx" class="line-move" @click="playLineMoves(moveData.best_line, idx + 1)">{{ prettyMove(move) }}&nbsp;</span>
+          </div>
+          <div class="secondline pretty-scroll" v-if="excellentSanLine.length">
+            <span class="evalnum3">{{ moveData?.excellent_eval ? formatEval(moveData.excellent_eval) : "" }}</span>
+            <span v-for="(move, idx) in excellentSanLine" :key="'exc-' + idx" class="line-move" @click="playLineMoves(moveData.excellent_line, idx + 1)">{{ prettyMove(move) }}&nbsp;</span>
+          </div>
+          <div class="secondline pretty-scroll" v-if="thirdSanLine.length">
+            <span class="evalnum3">{{ moveData?.third_eval ? formatEval(moveData.third_eval) : "" }}</span>
+            <span v-for="(move, idx) in thirdSanLine" :key="'third-' + idx" class="line-move" @click="playLineMoves(moveData.third_line, idx + 1)">{{ prettyMove(move) }}&nbsp;</span>
+          </div>
+          <p :style="{color: color}" class="accuracydescribtion">{{ isAccuracy }}</p>
+          <p class="bestmove" v-if="movesListUCI.length > 0" @click="playMove">{{ displayBest() }}</p>
+          <div class="sharebar">
+            <button class="sharebtn" @click="copyPGN">Copy PGN</button>
+            <button class="sharebtn" @click="copyFEN">Copy FEN</button>
+          </div>
+        </div>
+      </div>
+      <div class="moves">
+        <div class="tabs-toggle">
+          <button :class="{ active: activeTab === 'moves' }" @click="activeTab = 'moves'">Moves</button>
+          <button :class="{ active: activeTab === 'report' }" @click="activeTab = 'report'">Report</button>
+          <button :class="{ active: activeTab === 'explorer' }" @click="activeTab = 'explorer'">Explorer</button>
+        </div>
+        <div class="moveslist" v-if="activeTab === 'moves'" ref="movesListRef">
+          <template v-for="row in renderedMoves" :key="row.key">
+            <div class="move-row" :class="{ variant: row.depth > 0 }" :style="{ '--indent': `${row.depth * 1.05}rem` }">
               <div
-                v-for="(game, i) in group.games"
-                :key="group.key + '-' + i"
-                class="game-row"
-                :class="{ selected: isSelected(game) }"
-                @click="selectGame(game)"
+                v-for="(cell, index) in row.cells"
+                :key="cell ? cell.key : `${row.key}-empty-${index}`"
+                class="move-cell"
+                :class="[{ active: cell && cell.node === currentNode, variant: cell && cell.variant }, { empty: !cell }]"
+                @click="cell && handleCellClick(cell.node.id)"
+                @contextmenu.prevent="cell && openContextMenu($event, cell.node.id)"
+                @touchstart="cell && handleTouchStart($event, cell.node.id)"
+                @touchend="cancelLongPress"
+                @touchmove="cancelLongPress"
               >
-                <span class="color-dot" :class="formatResult(game).myColor.toLowerCase()"></span>
-                <span class="opponent">vs {{ formatResult(game).opponent }}</span>
-                <span v-if="formatDate(game)" class="date">{{ formatDate(game) }}</span>
-                <span class="rating">{{ formatResult(game).myRating }} vs {{ formatResult(game).oppRating }}</span>
-                <span class="result" :class="formatResult(game).outcome">{{ formatResult(game).result }}</span>
-                <button v-if="game.id" class="delete-btn" @click="deleteSavedGame(game.id, $event)">×</button>
+                <template v-if="cell">
+                  <span v-if="cell.showNum" class="move-num">{{ cell.displayNum }}{{ cell.isWhite ? '.' : '...' }}</span>
+                  <span class="move-san-text">{{ cell.node.san }}</span>
+                  <img v-if="cell.node.accuracy" :src="accuracySymbol(cell.node.accuracy)" class="acc-badge" :class="cell.node.accuracy"/>
+                </template>
               </div>
-            </section>
-          </div>
-
-          <div v-if="filteredGames.length === 0" class="empty">No games match your filters.</div>
+            </div>
+          </template>
         </div>
-
-        <div v-if="selectedGame && importSite !== 'fen'" class="selection-bar">
-          <div class="selection-info">
-            <span class="selected-msg">Game ready</span>
-            <span class="selection-players">
-              {{ selectedGame.white.username }} ({{ selectedGame.white.rating }})
-              vs {{ selectedGame.black.username }} ({{ selectedGame.black.rating }})
-              <template v-if="formatDate(selectedGame)"> · {{ formatDate(selectedGame) }}</template>
-            </span>
+        <div class="report" v-else-if="activeTab === 'report'">
+          <div class="report-columns">
+            <div class="report-col">
+              <div class="report-side-header"><span class="side-swatch white-swatch"></span><span>White</span></div>
+              <div class="accuracy-score" v-if="gameReportStats.white.accuracy !== null">{{ gameReportStats.white.accuracy.toFixed(1) }}<span class="accuracy-percent">%</span></div>
+              <div class="accuracy-score empty" v-else>—</div>
+              <div class="est-rating" v-if="estimatedRatings.white !== null"><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">{{ estimatedRatings.white }}</span></div>
+              <div class="est-rating empty" v-else><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">—</span></div>
+              <div v-for="key in classificationOrder" :key="'w-' + key" class="report-row" :class="{ dim: gameReportStats.white.counts[key] === 0 }">
+                <img :src="accuracySymbol(key)" class="report-row-icon" />
+                <span class="report-row-label" :style="{ color: classificationMeta[key].color }">{{ classificationMeta[key].label }}</span>
+                <span class="report-row-count">{{ gameReportStats.white.counts[key] }}</span>
+              </div>
+            </div>
+            <div class="report-col">
+              <div class="report-side-header"><span class="side-swatch black-swatch"></span><span>Black</span></div>
+              <div class="accuracy-score" v-if="gameReportStats.black.accuracy !== null">{{ gameReportStats.black.accuracy.toFixed(1) }}<span class="accuracy-percent">%</span></div>
+              <div class="accuracy-score empty" v-else>—</div>
+              <div class="est-rating" v-if="estimatedRatings.black !== null"><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">{{ estimatedRatings.black }}</span></div>
+              <div class="est-rating empty" v-else><span class="est-rating-label">Est. Rating</span><span class="est-rating-value">—</span></div>
+              <div v-for="key in classificationOrder" :key="'b-' + key" class="report-row" :class="{ dim: gameReportStats.black.counts[key] === 0 }">
+                <img :src="accuracySymbol(key)" class="report-row-icon" />
+                <span class="report-row-label" :style="{ color: classificationMeta[key].color }">{{ classificationMeta[key].label }}</span>
+                <span class="report-row-count">{{ gameReportStats.black.counts[key] }}</span>
+              </div>
+            </div>
           </div>
-          <button class="analyse-btn" @click="analyseGame()">Analyse →</button>
         </div>
-        <div v-else-if="activeSource.length > 1 && !loading && importSite !== 'fen'" class="empty">
-          No game selected yet.
+        <div class="explorer" v-else-if="activeTab === 'explorer'">
+          <div class="explorer-db-toggle">
+            <button :class="{ active: explorerDb === 'masters' }" @click="explorerDb = 'masters'">Masters</button>
+            <button :class="{ active: explorerDb === 'lichess' }" @click="explorerDb = 'lichess'">Players</button>
+          </div>
+          <div v-if="explorerLoading" class="explorer-status"><div class="mini-spinner"></div>Loading {{ explorerDb === 'masters' ? 'master' : 'player' }} games…</div>
+          <div v-else-if="explorerError" class="explorer-status error">{{ explorerError }}</div>
+          <template v-else>
+            <div class="explorer-header">
+              <span class="explorer-eco" v-if="openingEco">{{ openingEco }}</span>
+              <span class="explorer-name">{{ opening }}</span>
+            </div>
+            <div class="explorer-table" v-if="explorerMoves.length">
+              <div class="explorer-row explorer-row-head"><span class="col-move">Move</span><span class="col-games">Games</span><span class="col-split">W / D / B</span></div>
+              <div v-for="m in explorerMoves" :key="m.uci" class="explorer-row" @click="playExplorerMove(m.uci)">
+                <span class="col-move">{{ prettyMove(m.san) }}</span>
+                <span class="col-games"><span class="games-percent">{{ m.percent }}%</span><span class="games-count">{{ formatCount(m.total) }}</span></span>
+                <span class="col-split">
+                  <div class="split-bar">
+                    <div class="split-white" :style="{ width: m.white + '%' }"></div>
+                    <div class="split-draw" :style="{ width: m.draws + '%' }"></div>
+                    <div class="split-black" :style="{ width: m.black + '%' }"></div>
+                  </div>
+                </span>
+              </div>
+              <div class="explorer-row explorer-row-total" v-if="explorerStats">
+                <span class="col-move">Σ</span>
+                <span class="col-games"><span class="games-percent">100%</span><span class="games-count">{{ formatCount(explorerStats.total) }}</span></span>
+                <span class="col-split">
+                  <div class="split-bar">
+                    <div class="split-white" :style="{ width: explorerStats.white + '%' }"></div>
+                    <div class="split-draw" :style="{ width: explorerStats.draws + '%' }"></div>
+                    <div class="split-black" :style="{ width: explorerStats.black + '%' }"></div>
+                  </div>
+                </span>
+              </div>
+            </div>
+            <div class="explorer-status" v-else>No games found for this position</div>
+          </template>
         </div>
       </div>
     </div>
   </div>
+  <Teleport to="body">
+    <div v-if="contextMenu.visible" class="context-menu" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }" @click.stop>
+      <button class="context-menu-item delete" @click="handleDeleteFromMenu">Delete move</button>
+    </div>
+  </Teleport>
+  <Transition name="toast-fade">
+    <div v-if="toastMessage" class="toast">{{ toastMessage }}</div>
+  </Transition>
 </template>
 
 <style scoped>
-  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
 
-  .page-layout {
+  .grid-layout {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     padding: clamp(0.5rem, 3vw, 1rem);
     display: grid;
     grid-template-columns: 1fr;
-    gap: 1.25rem;
-    justify-self: center;
-    min-width: 100%;
+    grid-template-areas:
+      "title"
+      "board"
+      "analysis";
+    gap: 1.5rem;
+    max-width: 1600px;
     margin: 0 auto;
     box-sizing: border-box;
   }
 
   @media (min-width: 768px) {
-    .page-layout { grid-template-columns: auto 1fr; gap: 1.5rem; }
+    .grid-layout {
+      grid-template-columns: auto 1fr;
+      grid-template-areas:
+        "title board"
+        "title analysis";
+      gap: 1rem;
+    }
   }
 
-  .content-area { display: flex; justify-content: stretch; width: 100%; min-width: 0; }
+  @media (min-width: 1200px) {
+    .grid-layout {
+      grid-template-columns: auto 2fr 1fr;
+      grid-template-areas: "title board analysis";
+      gap: 2rem;
+    }
+  }
 
-  .import-card {
+  .title-slot {
+    grid-area: title;
+    min-width: 0;
+  }
+
+  .board-area {
+    grid-area: board;
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .board-wrapper {
+    position: relative;
+    width: 100%;
+    max-width: min(95vw, 38rem);
+    min-width: 0;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .board-col {
+    flex: 1 1 auto;
+    min-width: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .game-board {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: 1 / 1 !important;
+    display: block;
+  }
+
+  :deep(.cg-wrap) {
+    overflow: hidden;
+    width: 100% !important;
+    height: 100% !important;
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4);
+    border-radius: 8px;
+  }
+
+  :deep(cg-board) {
+    background: conic-gradient(
+      var(--board-dark) 90deg,
+      var(--board-light) 90deg 180deg,
+      var(--board-dark) 180deg 270deg,
+      var(--board-light) 270deg
+    ) !important;
+    background-size: 25% 25% !important;
+  }
+
+  .board-row {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    width: 100%;
+  }
+
+  .evalbar {
+    width: clamp(24px, 4vw, 40px);
+    flex-shrink: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .evalbar-inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5);
+  }
+
+  .player-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.7rem;
+    margin-bottom: 0.2rem;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.22);
+    color: #f4f0e3;
+    font-family: 'Inter', sans-serif;
+    font-size: clamp(0.82rem, 1.8vw, 0.95rem);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .player-bar.bottom {
+    margin-bottom: 0;
+    margin-top: 0.2rem;
+  }
+
+  .player-color-dot {
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+  }
+
+  .player-color-dot.white {
+    background: #f4f0e3;
+  }
+
+  .player-color-dot.black {
+    background: #1a1a1a;
+  }
+
+  .player-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .winner-crown {
+    font-size: 1.1rem;
+    filter: drop-shadow(0 0 4px gold);
+  }
+
+  .player-rating {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.8em;
+    color: rgba(244, 240, 227, 0.75);
+    margin-left: auto;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    padding: 0.05rem 0.4rem;
+    flex-shrink: 0;
+  }
+
+  .moves {
+    margin-top: 10px;
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    border-radius: 16px;
+    width: 100%;
+    max-width: 500px;
+    height: clamp(300px, 50vh, 500px);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    overflow-y: auto;
+    overflow-x: hidden;
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    margin: 0 auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(194, 197, 170, 0.4) rgba(0, 0, 0, 0.2);
+  }
+
+  @media (min-width: 1200px) {
+    .moves {
+      max-width: 20rem;
+    }
+  }
+
+  .moveslist {
+    margin: 0 auto;
+    padding: 12px;
+    width: 100%;
+    box-sizing: border-box;
+    background: linear-gradient(135deg, var(--list-1), var(--list-2));
+    border-radius: 14px;
+    font-size: clamp(0.9rem, 2vw, 1rem);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    scroll-behavior: smooth;
+  }
+
+  .move-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    align-items: start;
+    margin-left: var(--indent, 0rem);
+    padding-left: 0.35rem;
+    position: relative;
+  }
+
+  .move-row.variant {
+    border-left: 2px solid rgba(232, 232, 208, 0.16);
+  }
+
+  .move-cell {
+    min-height: 2.45rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 12px;
+    cursor: pointer;
+    color: #f4f0e3;
+    font-weight: 500;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    background: rgba(0, 0, 0, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-sizing: border-box;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  .move-cell:hover {
+    background: rgba(103, 122, 228, 0.18);
+    transform: translateY(-1px);
+  }
+
+  .move-cell.active {
+    background: linear-gradient(135deg, rgba(103, 122, 228, 0.42), rgba(103, 122, 228, 0.22));
+    border-color: rgba(220, 228, 255, 0.7);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 18px rgba(103, 122, 228, 0.25);
+  }
+
+  .move-cell.variant {
+    color: #dbe4ff;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .move-cell.empty {
+    pointer-events: none;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .move-num {
+    color: rgba(232, 232, 208, 0.72);
+    font-size: 0.78em;
+    font-weight: 700;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.16);
+  }
+
+  .move-san-text {
+    font-weight: 600;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .acc-badge {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    margin-left: 2px;
+  }
+
+  .analysis-container {
+    grid-area: analysis;
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    padding: clamp(1.25rem, 3vw, 2rem);
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 18px;
-    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
-    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    min-width: 0;
   }
 
-  .card-header { text-align: center; }
+  .analyze {
+    border-radius: 15px;
+    width: 100%;
+    max-width: 500px;
+    min-height: 200px;
+    padding-bottom: 1rem;
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    box-sizing: border-box;
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    margin: auto;
+  }
 
-  .import-title {
+  @media (min-width: 1200px) {
+    .analyze {
+      max-width: 20rem;
+    }
+  }
+
+  .analyzis-header {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 3rem;
+    padding: 1rem 1rem 0.5rem;
+  }
+
+  .analyzis {
     font-family: serif;
     color: #f5f5dc;
     font-weight: 700;
     text-transform: uppercase;
     text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
     letter-spacing: 2px;
-    font-size: clamp(1.3rem, 3vw, 1.7rem);
-    margin: 0 0 0.4rem;
-  }
-
-  .import-subtitle { color: rgba(244, 240, 227, 0.72); font-size: 0.85rem; margin: 0; }
-
-  .site-toggle, .mode-toggle {
+    font-size: clamp(1.1rem, 2.5vw, 1.4rem);
     display: flex;
+    align-items: center;
     gap: 0.5rem;
-    background: rgba(0, 0, 0, 0.2);
-    padding: 0.3rem;
-    border-radius: 10px;
+    margin: 0;
   }
 
-  .site-btn, .mode-btn {
-    flex: 1;
-    padding: 0.5rem 0.6rem;
-    border: none;
+  .settings-btn {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #fff;
     border-radius: 8px;
-    background: transparent;
-    color: rgba(244, 240, 227, 0.65);
-    font-weight: 600;
-    font-size: 0.85rem;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
     cursor: pointer;
     transition: all 0.2s ease;
   }
 
-  .site-btn:hover, .mode-btn:hover { color: #f4f0e3; }
-
-  .site-btn.active, .mode-btn.active {
-    background: var(--btn-active);
-    color: #f5f5dc;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+  .settings-btn:hover {
+    background: rgba(0, 0, 0, 0.4);
+    transform: scale(1.05);
   }
 
-  .controls { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: flex-end; }
-  .paste-controls { display: flex; flex-direction: column; gap: 0.6rem; }
+  .thinking-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: #6ad13f;
+    box-shadow: 0 0 8px rgba(106, 209, 63, 0.9);
+    animation: thinkingPulse 1s ease-in-out infinite;
+  }
 
-  .textarea { resize: vertical; font-family: "JetBrains Mono", monospace; font-size: 0.82rem; line-height: 1.4; }
-  .textarea-fen { resize: none; }
+  @keyframes thinkingPulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1.15); }
+  }
 
-  .field { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 10rem; min-width: 0; }
-  .field-small { flex: 1 1 5rem; }
+  .analysis-loading-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 10, 6, 0.25);
+    backdrop-filter: blur(4px) saturate(105%);
+  }
 
-  .field-label {
-    font-size: 0.72rem;
+  .loading-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 2rem 2.5rem;
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 18px;
+    box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
+    max-width: min(90vw, 22rem);
+  }
+
+  .loading-spinner {
+    position: relative;
+    width: 64px;
+    height: 64px;
+  }
+
+  .spinner-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 3px solid transparent;
+    border-top-color: var(--text-highlight);
+    animation: spinRing 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  }
+
+  .spinner-ring:nth-child(2) {
+    inset: 8px;
+    border-top-color: #a8d97a;
+    animation-duration: 1.6s;
+    animation-direction: reverse;
+  }
+
+  .spinner-ring:nth-child(3) {
+    inset: 16px;
+    border-top-color: #f4f0e3;
+    animation-duration: 2s;
+  }
+
+  @keyframes spinRing {
+    to { transform: rotate(360deg); }
+  }
+
+  .loading-title {
+    font-family: serif;
+    color: #f5f5dc;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-size: 1.05rem;
+    margin: 0;
+    text-align: center;
+  }
+
+  .loading-subtitle {
+    font-family: "JetBrains Mono", monospace;
+    color: rgba(244, 240, 227, 0.8);
+    font-size: 0.82rem;
+    margin: 0;
+    text-align: center;
+  }
+
+  .loading-progress-bar {
+    width: 180px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+    margin-top: 0.2rem;
+  }
+
+  .loading-progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--text-highlight), #a8d97a);
+    transition: width 0.3s ease;
+  }
+
+  .loading-tips {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.3rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    width: 100%;
+  }
+
+  .loading-tip {
+    font-size: 0.78rem;
+    color: rgba(244, 240, 227, 0.65);
+    text-align: center;
+    margin: 0;
+    line-height: 1.4;
+  }
+
+  .cancel-import-btn {
+    margin-top: 0.5rem;
+    padding: 0.55rem 1.3rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 107, 107, 0.35);
+    background: rgba(255, 60, 60, 0.12);
+    color: #ffb0a8;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .loading-fade-enter-active,
+  .loading-fade-leave-active {
+    transition: opacity 0.35s ease;
+  }
+
+  .loading-fade-enter-from,
+  .loading-fade-leave-to {
+    opacity: 0;
+  }
+
+  .tabs-toggle {
+    display: flex;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 4px;
+    border-radius: 10px;
+    margin: 12px 0.5rem 0;
+  }
+
+  .tabs-toggle button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: rgba(245, 245, 220, 0.6);
+    padding: 0.55rem 0.4rem;
+    border-radius: 7px;
+    cursor: pointer;
+    font-weight: 700;
+    font-family: serif;
+    font-size: clamp(0.7rem, 2vw, 0.95rem);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.2s ease;
+  }
+
+  .tabs-toggle button:hover:not(.active) {
+    color: rgba(245, 245, 220, 0.85);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .tabs-toggle button.active {
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    color: #f4f0e3;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .boardtools {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    align-items: center;
+    min-height: 3.2rem;
+    width: 100%;
+    box-sizing: border-box;
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    border: 2px solid rgba(182, 173, 144, 0.4);
+    padding: 0.5rem 1rem;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    margin: 0.4rem 0 0 0;
+    flex-wrap: wrap;
+  }
+
+  .reverse,
+  .undo,
+  .redo,
+  .jumpstart,
+  .jumpend {
+    background-color: var(--btn-idle);
+    width: clamp(35px, 8vw, 40px);
+    height: clamp(35px, 8vw, 40px);
+    border: none;
+    border-radius: 15px;
+    font-size: clamp(16px, 4vw, 20px);
+    color: #e8e8d0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .reverse:disabled,
+  .undo:disabled,
+  .redo:disabled,
+  .jumpstart:disabled,
+  .jumpend:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .reverse:hover:not(:disabled),
+  .undo:hover:not(:disabled),
+  .redo:hover:not(:disabled),
+  .jumpstart:hover:not(:disabled),
+  .jumpend:hover:not(:disabled) {
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  .blackeval,
+  .whiteeval {
+    width: 100%;
+    transition: all 0.5s ease;
+    position: relative;
+  }
+
+  .blackeval {
+    background-color: #38412e;
+  }
+
+  .whiteeval {
+    background-color: #626949;
+  }
+
+  .evalnum {
+    font-family: "JetBrains Mono", monospace;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: clamp(0.62rem, 1vw, 0.85rem);
+    font-weight: 600;
+    color: #fff8ef;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+    backdrop-filter: blur(4px);
+    z-index: 10;
+    white-space: nowrap;
+    width: max-content;
+  }
+
+  .accuracydescribtion {
+    font-weight: 500;
+    text-align: center;
+    font-size: clamp(1rem, 2.1vw, 1.2rem);
+    margin-top: 1rem;
+    padding: 0 1rem;
+    word-wrap: break-word;
+  }
+
+  .bestmove {
+    color: #41a24e;
+    text-align: center;
+    font-weight: 600;
+    margin-top: 0.1rem;
+    font-size: clamp(0.9rem, 1rem, 1.1rem);
+    padding: 0 1rem;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .move-data {
+    padding: 0 1rem;
+  }
+
+  .depthnum {
+    text-align: center;
+    color: rgba(245, 245, 220, 0.7);
+    font-size: 0.78rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
-    color: rgba(244, 240, 227, 0.65);
+    margin: 0.3rem 0 0.5rem;
   }
 
-  .input {
-    padding: 0.55rem 0.7rem;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+  .line,
+  .secondline {
+    font-family: "JetBrains Mono", monospace;
+    display: flex;
+    white-space: nowrap;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: clamp(0.85rem, 2vw, 1rem);
+    padding: 0.5rem;
+    margin: 8px 0;
     background: rgba(0, 0, 0, 0.25);
+    border-radius: 10px;
+    color: #eae4d8;
+    box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4);
+    overflow-x: auto;
+  }
+
+  /* Custom Scrollbar Styles for Analysis Lines */
+  .pretty-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) rgba(0, 0, 0, 0.15);
+  }
+
+  .pretty-scroll::-webkit-scrollbar {
+    height: 5px;
+  }
+
+  .pretty-scroll::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 10px;
+  }
+
+  .pretty-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+  }
+
+  .pretty-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.35);
+  }
+
+  .evalnum2,
+  .evalnum3 {
+    font-size: clamp(1rem, 2vw, 1.3rem);
+    color: #171717;
+    background-color: #606847;
+    border-radius: 10px;
+    flex-shrink: 0;
+    min-width: 4.4rem;
+    width: auto;
+    padding: 0 0.5rem;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .board-acc-icon {
+    position: absolute;
+    width: 4.5%;
+    height: 4.5%;
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  .line-move {
+    cursor: pointer;
+    padding: 0 2px;
+    border-radius: 4px;
+  }
+
+  .line-move:hover {
+    background: rgba(103, 122, 228, 0.3);
+  }
+
+  .sharebar {
+    display: flex;
+    justify-content: center;
+    gap: 0.6rem;
+    margin-top: 0.9rem;
+    padding: 0 1rem;
+  }
+
+  .sharebtn {
+    background: rgba(0, 0, 0, 0.22);
+    color: #f4f0e3;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .sharebtn:hover {
+    background: rgba(103, 122, 228, 0.3);
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 20, 0.92);
+    color: #f4f0e3;
+    padding: 0.6rem 1.2rem;
+    border-radius: 999px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    z-index: 1000;
+  }
+
+  .toast-fade-enter-active,
+  .toast-fade-leave-active {
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+
+  .toast-fade-enter-from,
+  .toast-fade-leave-to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+
+  .context-menu {
+    position: fixed;
+    z-index: 2000;
+    background: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    min-width: 140px;
+  }
+
+  .context-menu-item {
+    display: block;
+    width: 100%;
+    padding: 0.65rem 1rem;
+    background: transparent;
+    border: none;
     color: #f4f0e3;
     font-size: 0.9rem;
-    box-sizing: border-box;
-    width: 100%;
-  }
-
-  .input:focus {
-    outline: none;
-    border-color: var(--text-highlight);
-    box-shadow: 0 0 0 2px rgba(217, 179, 130, 0.2);
-  }
-
-  /* --- Custom Select Dropdown Styles --- */
-  .select-wrapper { position: relative; width: 100%; }
-
-  .select-input {
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    padding-right: 2.5rem;
+    text-align: left;
     cursor: pointer;
-    width: 100%;
   }
 
-  .select-wrapper .dropdown-arrow {
-    position: absolute;
-    right: 0.8rem;
-    top: 50%;
-    transform: translateY(-50%);
+  .context-menu-item.delete {
+    color: #ff6b6b;
+  }
+
+  .context-menu-item.delete:hover {
+    background: rgba(255, 60, 60, 0.2);
+  }
+
+  .report {
+    padding: 1rem;
+    box-sizing: border-box;
+  }
+
+  .report-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+  }
+
+  .report-col {
+    min-width: 0;
+    background: linear-gradient(135deg, var(--list-1), var(--list-2));
+    border-radius: 14px;
+    padding: 0.8rem 0.5rem;
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.25);
+    box-sizing: border-box;
+  }
+
+  .report-side-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    font-family: serif;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: #f5f5dc;
+    font-size: 0.78rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .side-swatch {
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+    display: inline-block;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+    flex-shrink: 0;
+  }
+
+  .white-swatch {
+    background: #f4f0e3;
+  }
+
+  .black-swatch {
+    background: #1a1a1a;
+  }
+
+  .accuracy-score {
+    font-family: "JetBrains Mono", monospace;
+    font-size: clamp(1.3rem, 6vw, 1.8rem);
+    font-weight: 700;
+    color: #a8d97a;
+    text-align: center;
+    margin: 0.4rem 0 0.7rem;
+  }
+
+  .accuracy-score.empty {
+    color: rgba(245, 245, 220, 0.4);
+    font-size: 1.2rem;
+  }
+
+  .accuracy-percent {
+    font-size: 0.6em;
+    opacity: 0.75;
+  }
+
+  .est-rating {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 0.8rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .est-rating-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(245, 245, 220, 0.5);
+    font-weight: 600;
+    margin-bottom: 0.2rem;
+  }
+
+  .est-rating-value {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #a8d97a;
+  }
+
+  .est-rating.empty .est-rating-value {
+    color: rgba(245, 245, 220, 0.4);
+  }
+
+  .report-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.3rem;
+    border-radius: 8px;
+    transition: background 0.15s ease;
+    min-width: 0;
+  }
+
+  .report-row:hover {
+    background: rgba(0, 0, 0, 0.12);
+  }
+
+  .report-row.dim {
+    opacity: 0.35;
+  }
+
+  .report-row-icon {
     width: 16px;
     height: 16px;
-    color: var(--text-highlight);
-    pointer-events: none;
-    transition: transform 0.2s ease;
+    flex-shrink: 0;
   }
 
-  .select-input option {
-    background-color: var(--bg-2);
+  .report-row-label {
+    flex: 1;
+    font-size: 0.76rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .report-row-count {
+    font-family: "JetBrains Mono", monospace;
+    font-weight: 700;
     color: #f4f0e3;
-    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+    padding: 0.05rem 0.4rem;
+    font-size: 0.76rem;
+    min-width: 1.3rem;
+    text-align: center;
+    flex-shrink: 0;
   }
 
-  .import-btn {
+  .explorer {
+    padding: 0.6rem 0.8rem 1rem;
+    box-sizing: border-box;
+  }
+
+  .explorer-status {
+    text-align: center;
+    color: rgba(245, 245, 220, 0.7);
+    font-size: 0.9rem;
+    padding: 2rem 1rem;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    padding: 0.6rem 1.1rem;
-    border-radius: 8px;
-    background: var(--btn-active);
-    color: #f4f0e3;
-    border: none;
-    font-weight: 600;
-    font-size: 0.9rem;
-    cursor: pointer;
-    transition: background 0.2s ease;
-    white-space: nowrap;
-    flex: 0 0 auto;
   }
 
-  .import-btn:hover:not(:disabled) { background: var(--btn-idle); }
-  .import-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-  .spinner {
-    width: 0.85rem; height: 0.85rem;
-    border-radius: 50%;
-    border: 2px solid rgba(244, 240, 227, 0.35);
-    border-top-color: #f4f0e3;
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .error {
+  .explorer-status.error {
     color: #ffb0a8;
-    background: rgba(255, 60, 60, 0.12);
-    border: 1px solid rgba(255, 100, 90, 0.3);
-    border-radius: 8px;
-    padding: 0.5rem 0.7rem;
-    font-size: 0.85rem;
   }
 
-  .info-note {
-    color: #e8c37a;
-    background: rgba(217, 179, 106, 0.1);
-    border: 1px solid rgba(217, 179, 106, 0.3);
-    border-radius: 8px;
-    padding: 0.5rem 0.7rem;
-    font-size: 0.82rem;
-  }
-
-  .save-toast {
-    color: #a8d97a;
-    background: rgba(106, 209, 63, 0.12);
-    border: 1px solid rgba(106, 209, 63, 0.3);
-    border-radius: 8px;
-    padding: 0.5rem 0.7rem;
-    font-size: 0.85rem;
-    text-align: center;
-  }
-
-  /* --- Results browser (shared by fetch results + library) --- */
-  .results { display: flex; flex-direction: column; gap: 0.6rem; }
-
-  .results-meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.8rem;
-    color: rgba(244, 240, 227, 0.65);
-    padding: 0 0.15rem;
-  }
-
-  .results-record { display: flex; gap: 0.45rem; font-weight: 700; }
-  .rec-w { color: #8fc06a; }
-  .rec-l { color: #d9736a; }
-  .rec-d { color: #d9b36a; }
-
-  .results-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .tc-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-
-  .tc-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.65rem;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(0, 0, 0, 0.2);
-    color: rgba(244, 240, 227, 0.75);
-    font-size: 0.78rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .tc-chip::before {
-    content: '';
-    width: 8px; height: 8px;
+  .mini-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: var(--text-highlight);
     border-radius: 50%;
-    background: var(--tc, #9a9a9a);
+    animation: spinRing 1s linear infinite;
+  }
+
+  .explorer-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem 0.8rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    margin-bottom: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .explorer-eco {
+    font-family: "JetBrains Mono", monospace;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--text-highlight);
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 0.1rem 0.4rem;
     flex-shrink: 0;
   }
 
-  .tc-chip:hover { color: #f4f0e3; border-color: rgba(255, 255, 255, 0.25); }
-
-  .tc-chip.active {
-    border-color: var(--tc, var(--text-highlight));
-    background: rgba(255, 255, 255, 0.08);
+  .explorer-name {
+    font-family: serif;
+    font-weight: 700;
     color: #f5f5dc;
+    font-size: clamp(0.95rem, 2.2vw, 1.15rem);
+    white-space: normal;
+    word-break: break-word;
   }
 
-  .chip-count {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.68rem;
-    opacity: 0.7;
-  }
-
-  /* Time-control accent colors (chips + group badges) */
-  .tc-chip.all, .tc-badge.all { --tc: #f4f0e3; }
-  .tc-chip.ultrabullet, .tc-badge.ultrabullet { --tc: #ff6b6b; }
-  .tc-chip.bullet, .tc-badge.bullet { --tc: #ff9f43; }
-  .tc-chip.blitz, .tc-badge.blitz { --tc: #f2c14e; }
-  .tc-chip.rapid, .tc-badge.rapid { --tc: #8fc06a; }
-  .tc-chip.classical, .tc-badge.classical { --tc: #6aa8d9; }
-  .tc-chip.correspondence, .tc-badge.correspondence { --tc: #a78bdb; }
-  .tc-chip.daily, .tc-badge.daily { --tc: #a78bdb; }
-  .tc-chip.unknown, .tc-badge.unknown { --tc: #9a9a9a; }
-
-  .search-input { max-width: 11rem; flex: 0 1 11rem; padding: 0.35rem 0.6rem; font-size: 0.8rem; }
-
-  .games-list {
+  .explorer-table {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
-    max-height: 50vh;
-    overflow-y: auto;
-    overflow-x: hidden;
-    scrollbar-width: thin;
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .tc-group { display: flex; flex-direction: column; gap: 0.35rem; }
-
-  .tc-group-header {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    padding: 0.15rem 0.2rem;
-  }
-
-  .tc-badge {
-    width: 9px; height: 9px;
-    border-radius: 50%;
-    background: var(--tc, #9a9a9a);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
-    flex-shrink: 0;
-  }
-
-  .tc-name {
-    font-size: 0.72rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: #f4f0e3;
-  }
-
-  .tc-stats {
-    margin-left: auto;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.72rem;
-    color: rgba(244, 240, 227, 0.55);
-    display: flex;
     gap: 0.35rem;
+  }
+
+  .explorer-row {
+    display: grid;
+    grid-template-columns: 2.8rem 1fr 1.8fr;
     align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .game-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.5rem 0.75rem;
-    padding: 0.55rem 0.75rem;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.2);
-    border: 1px solid transparent;
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
-    color: #f4f0e3;
-  }
-
-  .game-row:hover { background: rgba(0, 0, 0, 0.3); }
-
-  .game-row.selected {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: var(--text-highlight);
-  }
-
-  .color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25); }
-  .color-dot.white { background: #f4f0e3; }
-  .color-dot.black { background: #1a1a1a; }
-
-  .opponent { flex: 1; min-width: 6rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  .date {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.72rem;
-    color: rgba(244, 240, 227, 0.5);
-    flex-shrink: 0;
-  }
-
-  .rating { font-family: "JetBrains Mono", monospace; color: rgba(244, 240, 227, 0.6); font-size: 0.8rem; flex-shrink: 0; }
-
-  .result { font-weight: 700; font-size: 0.85rem; flex-shrink: 0; }
-  .result.win { color: #8fc06a; }
-  .result.loss { color: #d9736a; }
-  .result.draw { color: #d9b36a; }
-
-  @media (max-width: 560px) {
-    .rating { display: none; }
-    .search-input { max-width: 100%; flex: 1 1 100%; }
-  }
-
-  .selection-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.7rem 0.9rem;
-    background: rgba(255, 255, 255, 0.06);
+    gap: 0.6rem;
+    padding: 0.55rem 0.7rem;
     border-radius: 10px;
-    border: 1px solid var(--text-highlight);
-  }
-
-  .selection-info { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
-
-  .selected-msg { color: var(--text-highlight); font-weight: 700; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.5px; }
-
-  .selection-players { color: #f4f0e3; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  .analyse-btn {
-    padding: 0.5rem 1.1rem;
-    border-radius: 8px;
-    font-weight: 700;
-    color: #f4f0e3;
-    background: var(--btn-active);
-    border: none;
-    cursor: pointer;
-    transition: background 0.2s ease;
-    flex-shrink: 0;
-  }
-
-  .analyse-btn:hover { background: var(--btn-idle); }
-
-  .empty-library {
-    text-align: center;
-    padding: 2rem;
-    color: rgba(244, 240, 227, 0.5);
-    font-style: italic;
-    background: rgba(0, 0, 0, 0.1);
-    border-radius: 8px;
-  }
-
-  .delete-btn {
-    background: none;
-    border: none;
-    color: rgba(255, 100, 100, 0.5);
-    font-size: 1.2rem;
-    cursor: pointer;
-    padding: 0 0.5rem;
-    margin-left: auto;
-    transition: color 0.2s;
-  }
-
-  .delete-btn:hover { color: #ffb0a8; }
-
-  .empty {
-    color: rgba(244, 240, 227, 0.6);
-    text-align: center;
-    padding: 0.7rem;
     background: rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .explorer-row:not(.explorer-row-head):not(.explorer-row-total):hover {
+    background: rgba(103, 122, 228, 0.25);
+    transform: translateX(3px);
+  }
+
+  .explorer-row-head {
+    background: transparent;
+    cursor: default;
+    color: rgba(245, 245, 220, 0.55);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 700;
+    padding-bottom: 0.2rem;
+  }
+
+  .explorer-row-total {
+    cursor: default;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 0.4rem;
+    font-weight: 700;
+  }
+
+  .col-move {
+    font-weight: 700;
+    color: var(--text-highlight);
+    font-size: 1rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .col-games {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+    align-items: flex-start;
+  }
+
+  .games-percent {
+    font-family: "JetBrains Mono", monospace;
+    font-weight: 700;
+    font-size: 0.92rem;
+    color: #f4f0e3;
+  }
+
+  .games-count {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.7rem;
+    color: rgba(244, 240, 227, 0.45);
+  }
+
+  .col-split {
+    min-width: 0;
+  }
+
+  .split-bar {
+    display: flex;
+    width: 100%;
+    height: 1.5rem;
     border-radius: 8px;
-    font-size: 0.85rem;
+    overflow: hidden;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+  }
+
+  .split-white,
+  .split-draw,
+  .split-black {
+    height: 100%;
+    transition: width 0.3s ease;
+  }
+
+  .split-white {
+    background: #e8e4d8;
+  }
+
+  .split-draw {
+    background: #8a8a86;
+  }
+
+  .split-black {
+    background: #2b2b2b;
+  }
+
+  .explorer-db-toggle {
+    display: flex;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 4px;
+    border-radius: 10px;
+    margin: 0 0.5rem 0.8rem;
+  }
+
+  .explorer-db-toggle button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: rgba(245, 245, 220, 0.6);
+    padding: 0.45rem;
+    border-radius: 7px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: all 0.2s ease;
+  }
+
+  .explorer-db-toggle button.active {
+    background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
+    color: #f4f0e3;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   }
 </style>
