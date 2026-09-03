@@ -489,7 +489,7 @@
           const lastDate = lastGames[0]?.date
           const ageMin = lastDate ? (Date.now() - lastDate.getTime()) / 60000 : Infinity
           if (ageMin > 5) {
-            info.value = 'Showing your most recent published game. Chess.com can take a few minutes to publish brand-new games — if yours is missing, try again shortly.'
+            info.value = 'Showing your most recent published game. Chess.com can takes some time to publish brand-new games — if yours is missing, you can paste the pgn of the game in the pgn tab.'
           }
         }
 
