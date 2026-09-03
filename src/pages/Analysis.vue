@@ -211,13 +211,11 @@
       if (data.opening) {
         opening.value = data.opening.name
         openingEco.value = data.opening.eco
-        // Persist the opening on this node so descendants that go out of book can recall it
         currentNode.value.lastOpening = {
           name: data.opening.name,
           eco: data.opening.eco
         }
       } else {
-        // No opening classified for this position - fall back to the most recent known opening
         const last = getLastOpening(currentNode.value.parent)
         if (last) {
           opening.value = last.name
@@ -638,6 +636,39 @@
     }
     return map[acc] ? `/moveClassifications/${map[acc]}.png` : undefined
   }
+
+  // Helper functions to highlight the From and To squares dynamically
+  function lastMoveFromSquare() {
+    const parentUci = currentNode.value.parent?.uci
+    return parentUci ? parentUci.slice(0, 2) : null
+  }
+  function lastMoveToSquare() {
+    const parentUci = currentNode.value.parent?.uci
+    if (!parentUci) return null
+    let to = parentUci.slice(2, 4)
+    const castlingFix = { 'e1h1': 'g1', 'e1a1': 'c1', 'e8h8': 'g8', 'e8a8': 'c8' }
+    if (castlingFix[parentUci]) to = castlingFix[parentUci]
+    return to
+  }
+  function squareStyle(square) {
+    if (!square) return {}
+    const file = square.charCodeAt(0) - 97
+    const rank = parseInt(square[1]) - 1
+    const flipped = (rotate.value / 180) % 2 === 1
+    const col = flipped ? 7 - file : file
+    const row = flipped ? rank : 7 - rank
+    return { 
+      position: 'absolute', 
+      left: `${col * 12.5}%`, 
+      top: `${row * 12.5}%`, 
+      width: '12.5%', 
+      height: '12.5%',
+      zIndex: 5,
+      borderRadius: '0',
+      mixBlendMode: 'normal'
+    }
+  }
+
   function moveDescription() {
     isAccuracy.value = ''
     if (!currentNode.value.san) return
@@ -723,15 +754,6 @@
     if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M'
     if (num >= 10_000) return Math.round(num / 1000) + 'K'
     return num.toLocaleString()
-  }
-  function squareStyle(square) {
-    if (!square) return {}
-    const file = square.charCodeAt(0) - 97
-    const rank = parseInt(square[1]) - 1
-    const flipped = (rotate.value / 180) % 2 === 1
-    const col = flipped ? 7 - file : file
-    const row = flipped ? rank : 7 - rank
-    return { position: 'absolute', left: `${(col + 1) * 12.5}%`, top: `${row * 12.5}%`, transform: 'translate(-70%, -35%)' }
   }
 
   async function playMove() {
@@ -866,15 +888,15 @@
 
   const classificationOrder = ['brilliant', 'great', 'best', 'excellent', 'good', 'book', 'inaccuracy', 'mistake', 'blunder']
   const classificationMeta = {
-    brilliant: { label: 'Brilliant', color: '#03aea7' },
-    great: { label: 'Great', color: '#4c8cb5' },
-    best: { label: 'Best', color: '#6ad13f' },
-    excellent: { label: 'Excellent', color: '#90bc36' },
-    good: { label: 'Good', color: '#8eae83' },
-    book: { label: 'Book', color: '#ad8760' },
-    inaccuracy: { label: 'Inaccuracy', color: '#f2bc43' },
-    mistake: { label: 'Mistake', color: '#f38800' },
-    blunder: { label: 'Blunder', color: '#FF0000' }
+    brilliant: { label: 'Brilliant', color: '#03aea7', light: '#4dcdc7' },
+    great: { label: 'Great', color: '#4c8cb5', light: '#82aacc' },
+    best: { label: 'Best', color: '#6ad13f', light: '#9ee07a' },
+    excellent: { label: 'Excellent', color: '#90bc36', light: '#b2d069' },
+    good: { label: 'Good', color: '#8eae83', light: '#b0c6a8' },
+    book: { label: 'Book', color: '#ad8760', light: '#c7a887' },
+    inaccuracy: { label: 'Inaccuracy', color: '#f2bc43', light: '#f7d27a' },
+    mistake: { label: 'Mistake', color: '#f38800', light: '#f7a93f' },
+    blunder: { label: 'Blunder', color: '#FF0000', light: '#ff5050' }
   }
   const accuracyWeights = {
     brilliant: 100, great: 100, best: 100, book: 100,
@@ -1340,6 +1362,8 @@
               @board-created="onBoardCreated"
               :board-config="{ coordinates: true, animation: { enabled: false } }"
             />
+            <div v-if="lastMoveAccuracy && lastMoveFromSquare()" class="square-highlight" :style="[squareStyle(lastMoveFromSquare()), { backgroundColor: classificationMeta[lastMoveAccuracy]?.light } ]"></div>
+            <div v-if="lastMoveAccuracy && lastMoveToSquare()" class="square-highlight" :style="[squareStyle(lastMoveToSquare()), { backgroundColor: classificationMeta[lastMoveAccuracy]?.light } ]"></div>
             <img v-if="lastMoveSquare && lastMoveAccuracy" :src="accuracySymbol(lastMoveAccuracy)" class="board-acc-icon" :style="squareStyle(lastMoveSquare)" />
           </div>
           <div class="evalbar">
@@ -1601,6 +1625,10 @@
     background-size: 25% 25% !important;
   }
 
+  .square-highlight {
+    pointer-events: none;
+  }
+
   .board-row {
     display: flex;
     justify-content: center;
@@ -1802,6 +1830,20 @@
     height: 20px;
     border-radius: 50%;
     margin-left: 2px;
+  }
+
+  @media (max-width: 768px) {
+    .acc-badge {
+      width: 22px;
+      height: 22px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .acc-badge {
+      width: 24px;
+      height: 24px;
+    }
   }
 
   .analysis-container {
