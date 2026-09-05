@@ -84,6 +84,7 @@
   const treeVersion = ref(0)
   const movesListUCI = ref([])
   const lastMoveSquare = ref(null)
+  const lastMoveFromSquare = ref(null)
   const lastMoveAccuracy = ref(null)
   const boardRef = ref(null)
   const movesListRef = ref(null)
@@ -115,6 +116,30 @@
   const explorerLoading = ref(false)
   const explorerError = ref("")
   const explorerDb = ref('masters')
+
+  // Accuracy classification colors, reused both for the move-description text
+  // and for the CSS variable that tints the actual chessground last-move squares.
+  const accuracyColors = {
+    brilliant: '#03aea7', great: '#4c8cb5', best: '#6ad13f', excellent: '#90bc36',
+    good: '#8eae83', book: '#ad8760', inaccuracy: '#f2bc43', mistake: '#f38800', blunder: '#FF0000'
+  }
+  function hexToRgba(hex, alpha) {
+    const n = parseInt(hex.replace('#', ''), 16)
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+  }
+  const lastMoveHighlightColor = computed(() => {
+    const c = accuracyColors[lastMoveAccuracy.value]
+    return c ? hexToRgba(c, 0.35) : null
+  })
+
+  // Keep chessground's own last-move squares in sync with our from/to state.
+  // We drive the board via setPosition() rather than its internal move engine,
+  // so chessground won't know the last move on its own — setConfig({ lastMove })
+  // is the supported way to tell it which real board squares to highlight.
+  watch([lastMoveFromSquare, lastMoveSquare], ([from, to]) => {
+    if (!boardAPI.value) return
+    boardAPI.value.setConfig({ lastMove: from && to ? [from, to] : undefined })
+  })
 
   function isExplorerOutOfBook(node, db) {
     let n = node
@@ -497,6 +522,7 @@
 
   function undoMove() {
     lastMoveSquare.value = null
+    lastMoveFromSquare.value = null
     lastMoveAccuracy.value = null
     if (currentNode.value.parent === null) return
     chess.undo()
@@ -506,6 +532,7 @@
   }
   function redoMove() {
     lastMoveSquare.value = null
+    lastMoveFromSquare.value = null
     lastMoveAccuracy.value = null
     if (currentNode.value.children.length === 0) return
     const nextNode = currentNode.value.children[0]
@@ -559,11 +586,12 @@
     await cancelAnalysis()
     const cached = currentNode.value.analysisData
     const requiresMultiPV3 = !isImporting.value
-    const hasRequiredMultiPV = !requiresMultiPV3 || (cached?.topMoves?.length >= 3)
+    const hasRequiredMultiPV = !requiresMultiPV3 || !currentNode.value.san || (cached?.topMoves?.length >= 3)
 
     if (cached && cached.depth >= targetDepth.value && hasRequiredMultiPV) {
       moveData.value = cached
       lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
+      lastMoveFromSquare.value = movesListUCI.value.at(-1)?.slice(0, 2) ?? null
       lastMoveAccuracy.value = cached.move_accuracy
       currentDepth.value = cached.depth
       isAnalyzing.value = false
@@ -574,6 +602,7 @@
     if (cached && !hasRequiredMultiPV) {
       moveData.value = cached
       lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
+      lastMoveFromSquare.value = movesListUCI.value.at(-1)?.slice(0, 2) ?? null
       lastMoveAccuracy.value = cached.move_accuracy
       currentDepth.value = cached.depth
       evalSize(); moveDescription(); sanBest(); uciSecondLine(); uciThirdLine(); uciLine(); drawBestArrow()
@@ -593,6 +622,7 @@
       (result) => {
         moveData.value = result
         lastMoveSquare.value = movesListUCI.value.at(-1)?.slice(2, 4) ?? null
+        lastMoveFromSquare.value = movesListUCI.value.at(-1)?.slice(0, 2) ?? null
         lastMoveAccuracy.value = result.move_accuracy
         currentNode.value.accuracy = result.move_accuracy
         currentNode.value.analysisData = result
@@ -838,15 +868,14 @@
         boardAPI.value.setPosition(chess.fen())
       }
       if (!importCancelled) {
+        goToStart()
         treeVersion.value++
         await saveGameInsights()
         activeTab.value = 'report'
       }
     } finally {
       isImporting.value = false
-      if (!importCancelled) {
-        goToStart()
-      }
+      getAccuracy()
     }
   }
   async function tryLoadImportedGame() {
@@ -1325,7 +1354,7 @@
   <div class="grid-layout">
     <Title class="title-slot" />
     <div class="board-area">
-      <div class="board-wrapper" ref="boardRef">
+      <div class="board-wrapper" ref="boardRef" :style="{ '--last-move-highlight': lastMoveHighlightColor }">
         <div class="player-bar" v-if="hasPlayerInfo">
           <span class="player-color-dot" :class="topPlayer.side"></span>
           <span class="player-name">{{ topPlayer.name }}</span>
@@ -1601,6 +1630,12 @@
     background-size: 25% 25% !important;
   }
 
+  /* Tint chessground's own last-move squares to match the accuracy badge color.
+     --last-move-highlight is set inline on .board-wrapper based on the current move's classification. */
+  :deep(cg-board square.last-move) {
+    background-color: var(--last-move-highlight, rgba(155, 199, 0, 0.41)) !important;
+  }
+
   .board-row {
     display: flex;
     justify-content: center;
@@ -1699,6 +1734,8 @@
     box-sizing: border-box;
     border: 1px solid rgba(255, 255, 255, 0.08);
     margin: 0 auto;
+    overflow: auto;
+    min-height: 200px;
     scrollbar-width: thin;
     scrollbar-color: rgba(194, 197, 170, 0.4) rgba(0, 0, 0, 0.2);
   }
@@ -1823,6 +1860,9 @@
     box-shadow: 0 15px 35px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
     border: 1px solid rgba(255, 255, 255, 0.08);
     margin: auto;
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.4) rgba(0, 0, 0, 0.1);
   }
 
   @media (min-width: 1200px) {
@@ -2665,5 +2705,20 @@
     background: linear-gradient(145deg, var(--panel-1), var(--panel-2));
     color: #f4f0e3;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+
+  @media (max-width: 767px) {
+    .acc-badge {
+      width: 24px;
+      height: 24px;
+    }
+    .board-acc-icon {
+      width: 5.2%;
+      height: 5.2%;
+    }
+    .report-row-icon {
+      width: 18px;
+      height: 18px;
+    }
   }
 </style>

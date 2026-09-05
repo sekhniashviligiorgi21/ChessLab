@@ -321,6 +321,22 @@ function isSacrifice(beforeFen, afterFen, move) {
     return (capturedValue - opponentBestResponse) < 0
 }
 
+// A move that simply captures an undefended ("hanging") piece requires no
+// real calculation, so it shouldn't be flagged as a "great" find even when
+// the resulting eval swing is large.
+function isHangingCapture(beforeFen, move) {
+    if (!beforeFen || !move) return false
+
+    const board = parseFenBoard(beforeFen)
+    const { rankIndex, file } = squareToIndices(move.slice(2, 4))
+    const capturedPiece = board[rankIndex][file]
+
+    if (!capturedPiece || !PIECE_VALUES[capturedPiece.type]) return false // not a capture
+
+    const defenders = findAttackers(board, rankIndex, file, capturedPiece.color)
+    return defenders.length === 0
+}
+
 function analyzePosition(moves, depth, onUpdate = null, multiPV = 3, rootFen = null) {
     const myId = analysisId
     const effectiveRoot = (rootFen && rootFen !== STARTPOS_FEN) ? rootFen : null
@@ -561,10 +577,18 @@ export async function getEvaluation(move, movesList, depth, onUpdate = null, bef
 
                 if (isBrilliant) {
                     accuracy = "brilliant"
-                } else if (uniquenessGap > 100) {
-                    accuracy = "great"
                 } else {
-                    accuracy = "best"
+                    // Neither a simple recapture nor grabbing an already-hanging piece
+                    // requires real calculation, so don't call them "great"
+                    const opponentLastMove = movesList && movesList.length > 0 ? movesList[movesList.length - 1] : null
+                    const isSimpleRecapture = opponentLastMove && opponentLastMove.slice(2, 4) === move.slice(2, 4)
+                    const isFreeCapture = isHangingCapture(beforeFen, move)
+
+                    if (uniquenessGap > 100 && !isSimpleRecapture && !isFreeCapture) {
+                        accuracy = "great"
+                    } else {
+                        accuracy = "best"
+                    }
                 }
             } else if (best_move === move || loss < 15) {
                 accuracy = "best"
