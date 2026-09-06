@@ -2802,7 +2802,7 @@
 
     .moves {
       flex: 1 1 auto;
-      min-height: 140px;
+      min-height: 450px;
       height: auto;
       max-width: none;
       margin: 0;
