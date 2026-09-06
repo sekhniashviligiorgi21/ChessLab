@@ -1504,9 +1504,9 @@
                 <span class="col-games"><span class="games-percent">{{ m.percent }}%</span><span class="games-count">{{ formatCount(m.total) }}</span></span>
                 <span class="col-split">
                   <div class="split-bar">
-                    <div class="split-white" :style="{ width: m.white + '%' }"></div>
-                    <div class="split-draw" :style="{ width: m.draws + '%' }"></div>
-                    <div class="split-black" :style="{ width: m.black + '%' }"></div>
+                    <div class="split-white" :style="{ width: m.white + '%' }"><span v-if="m.white >= 15" class="split-pct">{{ m.white }}%</span></div>
+                    <div class="split-draw" :style="{ width: m.draws + '%' }"><span v-if="m.draws >= 15" class="split-pct">{{ m.draws }}%</span></div>
+                    <div class="split-black" :style="{ width: m.black + '%' }"><span v-if="m.black >= 15" class="split-pct">{{ m.black }}%</span></div>
                   </div>
                 </span>
               </div>
@@ -1515,9 +1515,9 @@
                 <span class="col-games"><span class="games-percent">100%</span><span class="games-count">{{ formatCount(explorerStats.total) }}</span></span>
                 <span class="col-split">
                   <div class="split-bar">
-                    <div class="split-white" :style="{ width: explorerStats.white + '%' }"></div>
-                    <div class="split-draw" :style="{ width: explorerStats.draws + '%' }"></div>
-                    <div class="split-black" :style="{ width: explorerStats.black + '%' }"></div>
+                    <div class="split-white" :style="{ width: explorerStats.white + '%' }"><span v-if="explorerStats.white >= 15" class="split-pct">{{ explorerStats.white }}%</span></div>
+                    <div class="split-draw" :style="{ width: explorerStats.draws + '%' }"><span v-if="explorerStats.draws >= 15" class="split-pct">{{ explorerStats.draws }}%</span></div>
+                    <div class="split-black" :style="{ width: explorerStats.black + '%' }"><span v-if="explorerStats.black >= 15" class="split-pct">{{ explorerStats.black }}%</span></div>
                   </div>
                 </span>
               </div>
@@ -2520,7 +2520,7 @@
   }
 
   .explorer {
-    padding: 0.6rem 0.8rem 1rem;
+    padding: 0.4rem 0.5rem 0.6rem;
     box-sizing: border-box;
   }
 
@@ -2552,9 +2552,9 @@
     display: flex;
     align-items: baseline;
     gap: 0.5rem;
-    padding: 0.4rem 0.5rem 0.8rem;
+    padding: 0.25rem 0.3rem 0.5rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    margin-bottom: 0.6rem;
+    margin-bottom: 0.4rem;
     flex-wrap: wrap;
   }
 
@@ -2581,16 +2581,16 @@
   .explorer-table {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.25rem;
   }
 
   .explorer-row {
     display: grid;
-    grid-template-columns: 2.8rem 1fr 1.8fr;
+    grid-template-columns: 2.3rem 1fr 1.6fr;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.55rem 0.7rem;
-    border-radius: 10px;
+    gap: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: 8px;
     background: rgba(0, 0, 0, 0.15);
     cursor: pointer;
     transition: all 0.2s ease;
@@ -2605,11 +2605,11 @@
     background: transparent;
     cursor: default;
     color: rgba(245, 245, 220, 0.55);
-    font-size: 0.68rem;
+    font-size: 0.62rem;
     text-transform: uppercase;
     letter-spacing: 0.6px;
     font-weight: 700;
-    padding-bottom: 0.2rem;
+    padding-bottom: 0.1rem;
   }
 
   .explorer-row-total {
@@ -2623,7 +2623,7 @@
   .col-move {
     font-weight: 700;
     color: var(--text-highlight);
-    font-size: 1rem;
+    font-size: 0.88rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2639,13 +2639,13 @@
   .games-percent {
     font-family: "JetBrains Mono", monospace;
     font-weight: 700;
-    font-size: 0.92rem;
+    font-size: 0.8rem;
     color: #f4f0e3;
   }
 
   .games-count {
     font-family: "JetBrains Mono", monospace;
-    font-size: 0.7rem;
+    font-size: 0.62rem;
     color: rgba(244, 240, 227, 0.45);
   }
 
@@ -2656,8 +2656,8 @@
   .split-bar {
     display: flex;
     width: 100%;
-    height: 1.5rem;
-    border-radius: 8px;
+    height: 1.1rem;
+    border-radius: 6px;
     overflow: hidden;
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
   }
@@ -2667,18 +2667,29 @@
   .split-black {
     height: 100%;
     transition: width 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.62rem;
+    font-weight: 700;
+    overflow: hidden;
+    white-space: nowrap;
   }
 
   .split-white {
     background: #e8e4d8;
+    color: #333;
   }
 
   .split-draw {
     background: #8a8a86;
+    color: #f4f0e3;
   }
 
   .split-black {
     background: #2b2b2b;
+    color: #f4f0e3;
   }
 
   .explorer-db-toggle {
