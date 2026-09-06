@@ -42,6 +42,7 @@
   })
 </script>
 
+
 <template>
   <div class="title-container">
     <h1 class="title">♔ CHESSERLY</h1>
@@ -50,27 +51,24 @@
       class="btn"
       :style="{ background: `linear-gradient(${bgColor('import')})` }"
       @click="importClick()"
-      aria-label="Game Import"
     >
-      <span class="btn-icon">🎮</span><span class="btn-label">GameImport</span>
+      🎮 GameImport
     </button>
 
     <button
       class="btn"
       :style="{ background: `linear-gradient(${bgColor('analyze')})` }"
       @click="analyzeClick()"
-      aria-label="Analyse"
     >
-      <span class="btn-icon">🔎</span><span class="btn-label">Analyse</span>
+      🔎 Analyse
     </button>
 
     <button
       class="btn"
       :style="{ background: `linear-gradient(${bgColor('insight')})` }"
       @click="insightsClick()"
-      aria-label="Insights"
     >
-      <span class="btn-icon">📊</span><span class="btn-label">Insights</span>
+      📊 Insights
     </button>
 
     <button
@@ -79,9 +77,8 @@
       @click="gameClick()"
       disabled
       data-tooltip="Coming soon..."
-      aria-label="VS Computer"
     >
-      <span class="btn-icon">🤖</span><span class="btn-label">VS Computer</span>
+      🤖 VS Computer
     </button>
 
     <button
@@ -90,9 +87,8 @@
       @click="puzzlesClick()"
       disabled
       data-tooltip="Coming soon..."
-      aria-label="Puzzles"
     >
-      <span class="btn-icon">🧩</span><span class="btn-label">Puzzles</span>
+      🧩 Puzzles
     </button>
   </div>
 </template>
@@ -112,10 +108,6 @@
     border-radius: 16px;
     border: 1px solid rgba(255,255,255,0.08);
     box-shadow: 0 15px 35px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.1);
-    scrollbar-color: grey transparent;
-    scrollbar-width: none;
-    position: relative; /* Added to establish stacking context */
-    z-index: 20; /* Added to prevent account overlays from blocking buttons */
   }
 
   .title {
@@ -149,20 +141,6 @@
 
     cursor: pointer;
     transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.45rem;
-  }
-
-  .btn-icon {
-    line-height: 1;
-    flex-shrink: 0;
-  }
-
-  .btn-label {
-    white-space: nowrap;
   }
 
   .btn {
@@ -243,50 +221,28 @@
   @media (max-width: 767px) {
     .title-container {
       flex-direction: row;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
       width: 100%;
       height: auto;
-      margin: 0 0 0.5rem 0;
-      padding: 0.4rem 0.6rem;
-      justify-content: space-between;
+      margin: 0 0 1rem 0;
+      padding: 0.75rem 1rem;
+      justify-content: center;
       align-items: center;
-      gap: 0.35rem;
-      overflow-x: auto;
-      z-index: 20;
+      gap: 0.6rem;
     }
     .title {
-      width: auto;
-      margin: 0;
-      margin-right: 0.2rem;
-      flex-shrink: 0;
-      font-size: clamp(1rem, 4.5vw, 1.25rem);
+      width: 100%;
+      margin: 0 0 0.25rem 0;
+      text-align: center;
     }
     button {
       margin-top: 0;
-      flex: 0 0 auto;
-      width: clamp(2.3rem, 9.5vw, 2.6rem);
-      height: clamp(2.3rem, 9.5vw, 2.6rem);
-      min-width: 0;
-      padding: 0;
-      border-radius: 10px;
+      flex: 1 1 auto;
+      min-width: 6rem;
     }
-    .btn-label {
-      display: none;
-    }
-    .btn-icon {
-      font-size: clamp(1.05rem, 5vw, 1.3rem);
-    }
-
-    /* Always display tooltips on mobile since hover isn't possible and buttons are disabled */
+    
     .tooltip-btn::after {
-      bottom: 135%;
-      font-size: 11px;
-      padding: 4px 7px;
-      opacity: 1; 
-    }
-    .tooltip-btn::before {
-      bottom: 120%;
-      opacity: 1; 
+    bottom: 125%;
     }
   }
 </style>
