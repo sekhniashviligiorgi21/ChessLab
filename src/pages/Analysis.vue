@@ -134,8 +134,8 @@
 
   // Keep chessground's own last-move squares in sync with our from/to state.
   // We drive the board via setPosition() rather than its internal move engine,
-  // so chessground won't know the last move on its own — setConfig({ lastMove })
-  // is the supported way to tell it which real board squares to highlight.
+  // so chessground won't know the last move on its own — setConfig({ lastMove }) is the
+  // supported way to tell it which real board squares to highlight.
   watch([lastMoveFromSquare, lastMoveSquare], ([from, to]) => {
     if (!boardAPI.value) return
     boardAPI.value.setConfig({ lastMove: from && to ? [from, to] : undefined })
@@ -1873,10 +1873,11 @@
 
   .analyzis-header {
     display: flex;
-    justify-content: flex-end;
+    justify-content: center; /* Changed to center the text */
     align-items: center;
     gap: 3rem;
     padding: 1rem 1rem 0.5rem;
+    position: relative; /* Added to anchor settings button */
   }
 
   .analyzis {
@@ -1906,6 +1907,9 @@
     align-items: center;
     cursor: pointer;
     transition: all 0.2s ease;
+    position: absolute; /* Positioned absolutely so text remains centered */
+    right: 1rem;
+    top: 1rem;
   }
 
   .settings-btn:hover {
@@ -2719,6 +2723,165 @@
     .report-row-icon {
       width: 18px;
       height: 18px;
+    }
+
+    /* Fit the whole page (nav + board + analysis) into the viewport when it
+       reasonably can, instead of stacking three full-height blocks that force
+       scrolling back and forth between the board and the moves/report/explorer
+       panel. The analysis panel grows to soak up whatever's left below the
+       board; if a device is genuinely too short, the page still falls back to
+       scrolling normally rather than clipping anything. */
+    .grid-layout {
+      display: flex;
+      flex-direction: column;
+      min-height: 100dvh;
+      padding: 0.4rem;
+      gap: 0.4rem;
+    }
+
+    .title-slot,
+    .board-area {
+      flex: 0 0 auto;
+    }
+
+    /* Let the board use the full available width instead of leaving a 5% margin */
+    .board-wrapper {
+      max-width: 100%;
+    }
+
+    .evalbar {
+      width: clamp(28px, 6vw, 44px);
+    }
+
+    .player-bar {
+      padding: 0.22rem 0.55rem;
+      margin-bottom: 0.15rem;
+      font-size: 0.78rem;
+    }
+
+    .player-bar.bottom {
+      margin-top: 0.15rem;
+    }
+
+    .boardtools {
+      min-height: 2.6rem;
+      padding: 0.3rem 0.6rem;
+      margin-top: 0.3rem;
+      gap: 0.5rem;
+    }
+
+    .analysis-container {
+      flex: 1 1 320px;
+      min-height: 0;
+      gap: 0.4rem;
+    }
+
+    .analyze {
+      flex: 0 0 auto;
+      max-height: 34vh;
+      overflow-y: auto;
+      margin: 0;
+      max-width: none;
+      min-height: 0;
+    }
+
+    .analyzis-header {
+      padding: 0.6rem 0.8rem 0.3rem;
+    }
+
+    .moves {
+      flex: 1 1 auto;
+      min-height: 140px;
+      height: auto;
+      max-width: none;
+      margin: 0;
+    }
+
+    .tabs-toggle {
+      margin: 8px 0.4rem 0;
+    }
+
+    .moveslist {
+      padding: 8px;
+      gap: 0.4rem;
+    }
+
+    .move-cell {
+      min-height: 2.1rem;
+      padding: 0.4rem 0.55rem;
+    }
+
+    .report {
+      padding: 0.6rem;
+    }
+
+    .report-col {
+      padding: 0.55rem 0.4rem;
+    }
+
+    .accuracy-score {
+      margin: 0.2rem 0 0.4rem;
+    }
+
+    .est-rating {
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.4rem;
+    }
+
+    .report-row {
+      padding: 0.2rem 0.25rem;
+    }
+
+    /* Explorer: shorter rows so more candidate moves fit before scrolling */
+    .explorer {
+      padding: 0.4rem 0.5rem 0.6rem;
+    }
+
+    .explorer-header {
+      padding: 0.25rem 0.3rem 0.5rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .explorer-table {
+      gap: 0.25rem;
+    }
+
+    .explorer-row {
+      grid-template-columns: 2.3rem 1fr 1.6fr;
+      gap: 0.4rem;
+      padding: 0.35rem 0.5rem;
+      border-radius: 8px;
+    }
+
+    .explorer-row-head {
+      font-size: 0.62rem;
+      padding-bottom: 0.1rem;
+    }
+
+    .col-move {
+      font-size: 0.88rem;
+    }
+
+    .games-percent {
+      font-size: 0.8rem;
+    }
+
+    .games-count {
+      font-size: 0.62rem;
+    }
+
+    .split-bar {
+      height: 1.1rem;
+      border-radius: 6px;
+    }
+
+    .explorer-db-toggle {
+      margin: 0 0.4rem 0.5rem;
+    }
+
+    .explorer-db-toggle button {
+      padding: 0.32rem;
+      font-size: 0.72rem;
     }
   }
 </style>
